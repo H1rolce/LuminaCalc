@@ -5,6 +5,7 @@ use crate::error::Span;
 use crate::eval;
 use crate::lexer::{Kw, Tok, Token};
 use crate::units;
+use crate::value::Notation;
 use std::collections::HashSet;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -27,26 +28,6 @@ pub enum HighlightKind {
 pub struct HighlightSpan {
     pub range: Span,
     pub kind: HighlightKind,
-}
-
-fn is_notation_word(name: &str) -> bool {
-    matches!(
-        name,
-        "hex"
-            | "bin"
-            | "binary"
-            | "oct"
-            | "octal"
-            | "dec"
-            | "decimal"
-            | "sci"
-            | "scientific"
-            | "шестн"
-            | "двоич"
-            | "восьм"
-            | "десят"
-            | "экспон"
-    )
 }
 
 /// Classifies every token on a line using the variables visible before this line.
@@ -72,7 +53,7 @@ pub fn classify(
             Tok::Ident(name) => {
                 if idx == 0 && next == Some(Tok::Assign) {
                     HighlightKind::AssignTarget
-                } else if (prev == Some(Tok::Keyword(Kw::In)) && is_notation_word(name))
+                } else if (prev == Some(Tok::Keyword(Kw::In)) && Notation::parse_keyword(name).is_some())
                     || (plot_mode && matches!(name, "x" | "y" | "t"))
                 {
                     HighlightKind::Keyword
