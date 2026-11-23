@@ -8,9 +8,9 @@
 //! - Magnetic cursor snapping to roots, intersections, extrema, and Y-intercepts
 //!   with one-click coordinate copy
 
-use crate::i18n::{Lang, format_error, tr};
+use crate::i18n::{Lang, Strings, format_error, tr};
 use crate::state::{SavedPlotCurve, SavedPlotParam};
-use crate::style::{self, Palette, ThemeId};
+use crate::style::{self, Palette};
 use egui::{
     Align2, Color32, CornerRadius, FontId, Frame, Id, Margin, Pos2, Rect, ScrollArea, Sense,
     Stroke, TextEdit, Ui, Vec2,
@@ -133,8 +133,15 @@ impl PlotView {
         view
     }
 
+    fn next_free_color_idx(&self) -> usize {
+        const PALETTE_LEN: usize = 6;
+        (0..PALETTE_LEN)
+            .find(|&idx| self.curves.iter().all(|c| c.color_idx % PALETTE_LEN != idx))
+            .unwrap_or_else(|| self.next_curve_id.saturating_sub(1) % PALETTE_LEN)
+    }
+
     pub fn add_expression(&mut self, expr: String) {
-        let color_idx = self.curves.len() % 6;
+        let color_idx = self.next_free_color_idx();
         let compiled = compile_plot(&expr);
         self.curves.push(PlotCurve {
             id: self.next_curve_id,
@@ -288,20 +295,8 @@ impl PlotView {
         });
     }
 
-    /// Renders the plotter sidebar + interactive canvas. Returns `(action, state_changed)`.
-    pub fn show(
-        &mut self,
-        ui: &mut Ui,
-        _theme: ThemeId,
-        lang: Lang,
-        palette: &Palette,
-    ) -> (PlotAction, bool) {
-        let s = tr(lang);
-        let mut action = PlotAction::None;
-        let mut dirty_state = false;
-
-        // Advance any animated parameters smoothly at display refresh rate (up to 240 FPS).
-        let dt = ui.ctx().input(|i| i.stable_dt).min(0.05) as f64;
+    fn advance_animations(&mut self, ctx: &egui::Context) {
+        let dt = ctx.input(|i| i.stable_dt).min(0.05) as f64;
         let mut any_animating = false;
         for p in &mut self.params {
             if p.animating {
@@ -319,14 +314,44 @@ impl PlotView {
         }
         if any_animating {
             self.bump_version();
-            ui.ctx().request_repaint();
+            ctx.request_repaint();
         }
+    }
+
+    /// Renders the plotter sidebar + interactive canvas. Returns `(action, state_changed)`.
+    pub fn show(
+        &mut self,
+        ui: &mut Ui,
+        lang: Lang,
+        palette: &Palette,
+    ) -> (PlotAction, bool) {
+        let s = tr(lang);
+        self.advance_animations(ui.ctx());
 
         let avail = ui.available_rect_before_wrap();
         let side_w = (avail.width() * 0.31).clamp(245.0, 340.0);
-
-        // ── Left sidebar: Equations & Auto-generated Sliders ──
         let side_rect = Rect::from_min_size(avail.min, Vec2::new(side_w, avail.height()));
+        let canvas_rect = Rect::from_min_max(
+            Pos2::new(side_rect.right(), avail.top()),
+            avail.max,
+        );
+
+        let dirty_state = self.show_sidebar(ui, side_rect, lang, s, palette);
+        let action = self.show_canvas(ui, canvas_rect, s, palette);
+
+        (action, dirty_state)
+    }
+
+    fn show_sidebar(
+        &mut self,
+        ui: &mut Ui,
+        side_rect: Rect,
+        lang: Lang,
+        s: &Strings,
+        palette: &Palette,
+    ) -> bool {
+        let mut dirty_state = false;
+
         ui.painter().rect_filled(side_rect, CornerRadius::ZERO, palette.bg_mantle);
         style::hairline_v(ui.painter(), side_rect, side_rect.right(), palette.border_subtle);
 
@@ -335,285 +360,16 @@ impl PlotView {
                 .id_salt("plot_sidebar_scroll")
                 .auto_shrink([false, false])
                 .show(ui, |ui| {
-                    // Header: Functions + Add button
-                    ui.horizontal(|ui| {
-                        ui.label(
-                            egui::RichText::new(s.plot_functions)
-                                .size(13.0)
-                                .strong()
-                                .color(palette.text_secondary),
-                        );
-                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                            let add_btn = style::paint_pill(
-                                ui,
-                                s.plot_add_fn,
-                                Palette::alpha(palette.accent, 36),
-                                palette.accent,
-                                Stroke::new(1.0, Palette::alpha(palette.accent, 110)),
-                                12.0,
-                            );
-                            if add_btn.clicked() {
-                                let idx = self.curves.len();
-                                let default_eq = match idx % 3 {
-                                    0 => "y = cos(x)",
-                                    1 => "y = 0.5 * x",
-                                    _ => "y = sin(x) / x",
-                                };
-                                self.add_expression(default_eq.to_owned());
-                                dirty_state = true;
-                            }
-                        });
-                    });
-
-                    ui.add_space(6.0);
-
-                    let mut remove_idx: Option<usize> = None;
-                    let mut recomp_needed = false;
-
-                    for i in 0..self.curves.len() {
-                        let color = palette.plot_colors[self.curves[i].color_idx % palette.plot_colors.len()];
-                        let err_info = self.curves[i].compiled.as_ref().err().cloned();
-
-                        Frame::new()
-                            .fill(palette.bg_surface)
-                            .stroke(Stroke::new(
-                                1.0,
-                                if err_info.is_some() {
-                                    Palette::alpha(palette.error, 140)
-                                } else {
-                                    palette.border_subtle
-                                },
-                            ))
-                            .corner_radius(CornerRadius::same(8))
-                            .inner_margin(Margin::symmetric(8, 7))
-                            .show(ui, |ui| {
-                                ui.horizontal(|ui| {
-                                    // Visibility toggle dot
-                                    let (dot_r, dot_resp) =
-                                        ui.allocate_exact_size(Vec2::splat(18.0), Sense::click());
-                                    if self.curves[i].visible {
-                                        ui.painter().circle_filled(dot_r.center(), 6.0, color);
-                                    } else {
-                                        ui.painter().circle_stroke(
-                                            dot_r.center(),
-                                            5.5,
-                                            Stroke::new(1.5, palette.text_muted),
-                                        );
-                                    }
-                                    if dot_resp.clicked() {
-                                        self.curves[i].visible = !self.curves[i].visible;
-                                        recomp_needed = true;
-                                        dirty_state = true;
-                                    }
-
-                                    // Syntax-highlighted equation input
-                                    let err_span_opt = err_info.as_ref().map(|e| e.span.clone());
-                                    let mut layouter = |ui: &Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
-                                        let job = style::build_singleline_highlight(
-                                            buf.as_str(),
-                                            true,
-                                            err_span_opt.as_ref(),
-                                            14.0,
-                                            wrap_width,
-                                            palette,
-                                        );
-                                        ui.painter().layout_job(job)
-                                    };
-
-                                    let input_w = (ui.available_width() - 26.0).max(80.0);
-                                    let curve_id = self.curves[i].id;
-                                    let resp = ui.add(
-                                        TextEdit::singleline(&mut self.curves[i].expr_text)
-                                            .id(Id::unique(("plot_eq", curve_id)))
-                                            .frame(Frame::NONE)
-                                            .desired_width(input_w)
-                                            .hint_text(s.plot_expr_hint)
-                                            .layouter(&mut layouter),
-                                    );
-                                    if resp.changed() {
-                                        self.curves[i].compiled = compile_plot(&self.curves[i].expr_text);
-                                        recomp_needed = true;
-                                        dirty_state = true;
-                                    }
-
-                                    // Delete curve button (keep at least 1 curve)
-                                    if self.curves.len() > 1 {
-                                        let (del_r, del_resp) =
-                                            ui.allocate_exact_size(Vec2::splat(18.0), Sense::click());
-                                        let col = if del_resp.hovered() {
-                                            palette.error
-                                        } else {
-                                            palette.text_muted
-                                        };
-                                        ui.painter().text(
-                                            del_r.center(),
-                                            Align2::CENTER_CENTER,
-                                            "×",
-                                            FontId::proportional(15.0),
-                                            col,
-                                        );
-                                        if del_resp.clicked() {
-                                            remove_idx = Some(i);
-                                        }
-                                    }
-                                });
-
-                                if let Some(err) = &err_info {
-                                    ui.add_space(2.0);
-                                    ui.label(
-                                        egui::RichText::new(format_error(lang, &err.kind))
-                                            .size(11.0)
-                                            .color(palette.error),
-                                    );
-                                }
-                            });
-                        ui.add_space(5.0);
-                    }
-
-                    if let Some(idx) = remove_idx {
-                        self.curves.remove(idx);
-                        recomp_needed = true;
+                    if self.show_curves_section(ui, lang, s, palette) {
                         dirty_state = true;
-                    }
-                    if recomp_needed {
-                        self.sync_params();
-                        self.bump_version();
                     }
 
                     ui.add_space(10.0);
                     style::hairline_h(ui, palette.border_subtle);
                     ui.add_space(8.0);
 
-                    // ── Auto-generated parameter sliders ──
-                    ui.label(
-                        egui::RichText::new(s.plot_params)
-                            .size(13.0)
-                            .strong()
-                            .color(palette.text_secondary),
-                    );
-                    ui.add_space(6.0);
-
-                    if self.params.is_empty() {
-                        ui.label(
-                            egui::RichText::new(s.plot_no_params)
-                                .size(12.0)
-                                .color(palette.text_muted),
-                        );
-                    } else {
-                        let mut param_changed = false;
-                        for p in &mut self.params {
-                            Frame::new()
-                                .fill(palette.bg_surface)
-                                .stroke(Stroke::new(1.0, palette.border_subtle))
-                                .corner_radius(CornerRadius::same(8))
-                                .inner_margin(Margin::symmetric(8, 7))
-                                .show(ui, |ui| {
-                                    ui.horizontal(|ui| {
-                                        // Play / pause animation toggle
-                                        let play_lbl = if p.animating { "❚❚" } else { "▶" };
-                                        let play_btn = style::paint_pill(
-                                            ui,
-                                            play_lbl,
-                                            if p.animating {
-                                                Palette::alpha(palette.accent, 45)
-                                            } else {
-                                                palette.bg_elevated
-                                            },
-                                            if p.animating { palette.accent } else { palette.text_secondary },
-                                            Stroke::new(1.0, palette.border_subtle),
-                                            10.5,
-                                        );
-                                        if play_btn.clicked() {
-                                            p.animating = !p.animating;
-                                        }
-
-                                        ui.label(
-                                            egui::RichText::new(format!("{} =", p.name))
-                                                .monospace()
-                                                .size(13.0)
-                                                .color(palette.syn_assign),
-                                        );
-                                        let dv = ui.add(
-                                            egui::DragValue::new(&mut p.value)
-                                                .speed(0.05)
-                                                .fixed_decimals(2),
-                                        );
-                                        if dv.changed() {
-                                            if p.value < p.min {
-                                                p.min = p.value;
-                                            }
-                                            if p.value > p.max {
-                                                p.max = p.value;
-                                            }
-                                            param_changed = true;
-                                        }
-
-                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                            if ui
-                                                .add(
-                                                    egui::Button::new(
-                                                        egui::RichText::new("↺").size(12.0),
-                                                    )
-                                                    .frame(false),
-                                                )
-                                                .clicked()
-                                            {
-                                                p.value = 1.0;
-                                                p.min = -5.0;
-                                                p.max = 5.0;
-                                                p.animating = false;
-                                                param_changed = true;
-                                            }
-                                        });
-                                    });
-
-                                    ui.add_space(3.0);
-                                    let min = p.min;
-                                    let max = p.max.max(min + 0.01);
-                                    ui.spacing_mut().slider_width = (ui.available_width() - 8.0).max(80.0);
-                                    let sl = ui.add(
-                                        egui::Slider::new(&mut p.value, min..=max)
-                                            .show_value(false),
-                                    );
-                                    if sl.changed() {
-                                        param_changed = true;
-                                    }
-
-                                    ui.horizontal(|ui| {
-                                        let dmin = ui.add(
-                                            egui::DragValue::new(&mut p.min)
-                                                .speed(0.2)
-                                                .max_decimals(2),
-                                        );
-                                        if dmin.changed() {
-                                            if p.min >= p.max {
-                                                p.max = p.min + 1.0;
-                                            }
-                                            p.value = p.value.clamp(p.min, p.max);
-                                            param_changed = true;
-                                        }
-                                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                            let dmax = ui.add(
-                                                egui::DragValue::new(&mut p.max)
-                                                    .speed(0.2)
-                                                    .max_decimals(2),
-                                            );
-                                            if dmax.changed() {
-                                                if p.max <= p.min {
-                                                    p.min = p.max - 1.0;
-                                                }
-                                                p.value = p.value.clamp(p.min, p.max);
-                                                param_changed = true;
-                                            }
-                                        });
-                                    });
-                                });
-                            ui.add_space(5.0);
-                        }
-                        if param_changed {
-                            self.bump_version();
-                            dirty_state = true;
-                        }
+                    if self.show_params_section(ui, s, palette) {
+                        dirty_state = true;
                     }
 
                     ui.add_space(10.0);
@@ -635,11 +391,294 @@ impl PlotView {
                 });
         });
 
-        // ── Right canvas: Interactive egui_plot ──
-        let canvas_rect = Rect::from_min_max(
-            Pos2::new(side_rect.right(), avail.top()),
-            avail.max,
+        dirty_state
+    }
+
+    fn show_curves_section(
+        &mut self,
+        ui: &mut Ui,
+        lang: Lang,
+        s: &Strings,
+        palette: &Palette,
+    ) -> bool {
+        let mut dirty_state = false;
+
+        ui.horizontal(|ui| {
+            ui.label(
+                egui::RichText::new(s.plot_functions)
+                    .size(13.0)
+                    .strong()
+                    .color(palette.text_secondary),
+            );
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let add_btn = style::paint_pill(
+                    ui,
+                    s.plot_add_fn,
+                    Palette::alpha(palette.accent, 36),
+                    palette.accent,
+                    Stroke::new(1.0, Palette::alpha(palette.accent, 110)),
+                    12.0,
+                );
+                if add_btn.clicked() {
+                    let idx = self.curves.len();
+                    let default_eq = match idx % 3 {
+                        0 => "y = cos(x)",
+                        1 => "y = 0.5 * x",
+                        _ => "y = sin(x) / x",
+                    };
+                    self.add_expression(default_eq.to_owned());
+                    dirty_state = true;
+                }
+            });
+        });
+
+        ui.add_space(6.0);
+
+        let mut remove_idx: Option<usize> = None;
+        let mut recomp_needed = false;
+
+        for i in 0..self.curves.len() {
+            let color = palette.plot_colors[self.curves[i].color_idx % palette.plot_colors.len()];
+            let err_info = self.curves[i].compiled.as_ref().err().cloned();
+
+            Frame::new()
+                .fill(palette.bg_surface)
+                .stroke(Stroke::new(
+                    1.0,
+                    if err_info.is_some() {
+                        Palette::alpha(palette.error, 140)
+                    } else {
+                        palette.border_subtle
+                    },
+                ))
+                .corner_radius(CornerRadius::same(8))
+                .inner_margin(Margin::symmetric(8, 7))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        // Visibility toggle dot
+                        let (dot_r, dot_resp) =
+                            ui.allocate_exact_size(Vec2::splat(18.0), Sense::click());
+                        if self.curves[i].visible {
+                            ui.painter().circle_filled(dot_r.center(), 6.0, color);
+                        } else {
+                            ui.painter().circle_stroke(
+                                dot_r.center(),
+                                5.5,
+                                Stroke::new(1.5, palette.text_muted),
+                            );
+                        }
+                        if dot_resp.clicked() {
+                            self.curves[i].visible = !self.curves[i].visible;
+                            recomp_needed = true;
+                            dirty_state = true;
+                        }
+
+                        // Syntax-highlighted equation input
+                        let err_span_opt = err_info.as_ref().map(|e| e.span.clone());
+                        let mut layouter =
+                            style::singleline_layouter(true, err_span_opt.as_ref(), 14.0, palette);
+
+                        let input_w = (ui.available_width() - 26.0).max(80.0);
+                        let curve_id = self.curves[i].id;
+                        let resp = ui.add(
+                            TextEdit::singleline(&mut self.curves[i].expr_text)
+                                .id(Id::unique(("plot_eq", curve_id)))
+                                .frame(Frame::NONE)
+                                .desired_width(input_w)
+                                .hint_text(s.plot_expr_hint)
+                                .layouter(&mut layouter),
+                        );
+                        if resp.changed() {
+                            self.curves[i].compiled = compile_plot(&self.curves[i].expr_text);
+                            recomp_needed = true;
+                            dirty_state = true;
+                        }
+
+                        // Delete curve button (keep at least 1 curve)
+                        if self.curves.len() > 1 {
+                            let (del_r, del_resp) =
+                                ui.allocate_exact_size(Vec2::splat(18.0), Sense::click());
+                            let col = if del_resp.hovered() {
+                                palette.error
+                            } else {
+                                palette.text_muted
+                            };
+                            ui.painter().text(
+                                del_r.center(),
+                                Align2::CENTER_CENTER,
+                                "×",
+                                FontId::proportional(15.0),
+                                col,
+                            );
+                            if del_resp.clicked() {
+                                remove_idx = Some(i);
+                            }
+                        }
+                    });
+
+                    if let Some(err) = &err_info {
+                        ui.add_space(2.0);
+                        ui.label(
+                            egui::RichText::new(format_error(lang, &err.kind))
+                                .size(11.0)
+                                .color(palette.error),
+                        );
+                    }
+                });
+            ui.add_space(5.0);
+        }
+
+        if let Some(idx) = remove_idx {
+            self.curves.remove(idx);
+            recomp_needed = true;
+            dirty_state = true;
+        }
+        if recomp_needed {
+            self.sync_params();
+            self.bump_version();
+        }
+
+        dirty_state
+    }
+
+    fn show_params_section(&mut self, ui: &mut Ui, s: &Strings, palette: &Palette) -> bool {
+        ui.label(
+            egui::RichText::new(s.plot_params)
+                .size(13.0)
+                .strong()
+                .color(palette.text_secondary),
         );
+        ui.add_space(6.0);
+
+        if self.params.is_empty() {
+            ui.label(
+                egui::RichText::new(s.plot_no_params)
+                    .size(12.0)
+                    .color(palette.text_muted),
+            );
+            return false;
+        }
+
+        let mut param_changed = false;
+        for p in &mut self.params {
+            Frame::new()
+                .fill(palette.bg_surface)
+                .stroke(Stroke::new(1.0, palette.border_subtle))
+                .corner_radius(CornerRadius::same(8))
+                .inner_margin(Margin::symmetric(8, 7))
+                .show(ui, |ui| {
+                    ui.horizontal(|ui| {
+                        let play_lbl = if p.animating { "❚❚" } else { "▶" };
+                        let play_btn = style::paint_pill(
+                            ui,
+                            play_lbl,
+                            if p.animating {
+                                Palette::alpha(palette.accent, 45)
+                            } else {
+                                palette.bg_elevated
+                            },
+                            if p.animating { palette.accent } else { palette.text_secondary },
+                            Stroke::new(1.0, palette.border_subtle),
+                            10.5,
+                        );
+                        if play_btn.clicked() {
+                            p.animating = !p.animating;
+                        }
+
+                        ui.label(
+                            egui::RichText::new(format!("{} =", p.name))
+                                .monospace()
+                                .size(13.0)
+                                .color(palette.syn_assign),
+                        );
+                        let dv = ui.add(
+                            egui::DragValue::new(&mut p.value)
+                                .speed(0.05)
+                                .fixed_decimals(2),
+                        );
+                        if dv.changed() {
+                            if p.value < p.min {
+                                p.min = p.value;
+                            }
+                            if p.value > p.max {
+                                p.max = p.value;
+                            }
+                            param_changed = true;
+                        }
+
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            if ui
+                                .add(
+                                    egui::Button::new(egui::RichText::new("↺").size(12.0))
+                                        .frame(false),
+                                )
+                                .clicked()
+                            {
+                                p.value = 1.0;
+                                p.min = -5.0;
+                                p.max = 5.0;
+                                p.animating = false;
+                                param_changed = true;
+                            }
+                        });
+                    });
+
+                    ui.add_space(3.0);
+                    let min = p.min;
+                    let max = p.max.max(min + 0.01);
+                    ui.spacing_mut().slider_width = (ui.available_width() - 8.0).max(80.0);
+                    if ui
+                        .add(egui::Slider::new(&mut p.value, min..=max).show_value(false))
+                        .changed()
+                    {
+                        param_changed = true;
+                    }
+
+                    ui.horizontal(|ui| {
+                        let dmin = ui.add(
+                            egui::DragValue::new(&mut p.min)
+                                .speed(0.2)
+                                .max_decimals(2),
+                        );
+                        if dmin.changed() {
+                            if p.min >= p.max {
+                                p.max = p.min + 1.0;
+                            }
+                            p.value = p.value.clamp(p.min, p.max);
+                            param_changed = true;
+                        }
+                        ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                            let dmax = ui.add(
+                                egui::DragValue::new(&mut p.max)
+                                    .speed(0.2)
+                                    .max_decimals(2),
+                            );
+                            if dmax.changed() {
+                                if p.max <= p.min {
+                                    p.min = p.max - 1.0;
+                                }
+                                p.value = p.value.clamp(p.min, p.max);
+                                param_changed = true;
+                            }
+                        });
+                    });
+                });
+            ui.add_space(5.0);
+        }
+        if param_changed {
+            self.bump_version();
+        }
+        param_changed
+    }
+
+    fn show_canvas(
+        &mut self,
+        ui: &mut Ui,
+        canvas_rect: Rect,
+        s: &Strings,
+        palette: &Palette,
+    ) -> PlotAction {
+        let mut action = PlotAction::None;
 
         // Pre-populate cache using last known bounds so `PlotPoints::Borrowed` works with zero copies.
         let [bx0, bx1, by0, by1] = self.last_bounds;
@@ -824,7 +863,7 @@ impl PlotView {
             }
         }
 
-        (action, dirty_state)
+        action
     }
 }
 
