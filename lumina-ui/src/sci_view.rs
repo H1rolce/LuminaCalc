@@ -9,13 +9,13 @@
 //! - Stacked fraction results (`23/12`, mixed `1 11/12` via `SHIFT + S⇔D`) & `ENG` notation
 //! - `SHIFT`, `HYP`, `DEG/RAD/GRAD`, memory (`MC/MR/M-/M+/STO`), `Ans`, and live history tape
 
-use crate::i18n::{Lang, format_error, tr};
-use crate::math_display::{self, PaintFeedback};
+use crate::i18n::{Lang, Strings, format_error, tr};
+use crate::math_display::{self, MathNode, PaintFeedback};
 use crate::state::SavedSciHistoryItem;
 use crate::style::{self, Palette};
 use egui::{
-    Align2, Color32, CornerRadius, CursorIcon, Event, FontId, Frame, Id, Key, Margin, Pos2,
-    ScrollArea, Sense, Stroke, TextEdit, Ui, Vec2,
+    Align2, Color32, Context, CornerRadius, CursorIcon, Event, FontId, Frame, Id, Key, Margin,
+    Painter, Pos2, ScrollArea, Sense, Stroke, TextEdit, Ui, Vec2,
 };
 use lumina_core::{
     AngleUnit, CalcError, Env, FormatOptions, Value, decimal_to_fraction, eval_str,
@@ -44,6 +44,81 @@ enum KeyTone {
     Shift,
 }
 
+#[derive(Debug, Clone, Copy)]
+enum KeyLabel {
+    Text(&'static str),
+    FractionIcon,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum KeyAction {
+    Insert { token: &'static str, replace_on_commit: bool },
+    InsertHyp { token: &'static str, replace_on_commit: bool },
+    Fraction { mixed: bool },
+    MemClear,
+    MemStore,
+    MemAdd(i8),
+    Backspace,
+    ClearAll,
+    Evaluate,
+    Random,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct KeySpec {
+    main_label: KeyLabel,
+    shift_label: &'static str,
+    main: KeyAction,
+    shift: KeyAction,
+    tone: KeyTone,
+}
+
+impl KeySpec {
+    const fn sci(
+        main_label: &'static str,
+        shift_label: &'static str,
+        main: KeyAction,
+        shift: KeyAction,
+    ) -> Self {
+        Self {
+            main_label: KeyLabel::Text(main_label),
+            shift_label,
+            main,
+            shift,
+            tone: KeyTone::Sci,
+        }
+    }
+
+    const fn num(
+        main_label: &'static str,
+        shift_label: &'static str,
+        main: KeyAction,
+        shift: KeyAction,
+        tone: KeyTone,
+    ) -> Self {
+        Self {
+            main_label: KeyLabel::Text(main_label),
+            shift_label,
+            main,
+            shift,
+            tone,
+        }
+    }
+}
+
+const fn ins(token: &'static str, replace_on_commit: bool) -> KeyAction {
+    KeyAction::Insert { token, replace_on_commit }
+}
+
+const fn ins_hyp(token: &'static str, replace_on_commit: bool) -> KeyAction {
+    KeyAction::InsertHyp { token, replace_on_commit }
+}
+
+struct CachedMathTree {
+    expr: String,
+    tree: MathNode,
+}
+
 #[derive(Debug, Clone)]
 struct HistoryItem {
     expr: String,
@@ -69,6 +144,7 @@ pub struct ScientificView {
     memory: Option<Value>,
     committed: bool,
     last_eval: Option<Result<Value, CalcError>>,
+    math_tree_cache: Option<CachedMathTree>,
     history: Vec<HistoryItem>,
     history_cursor: Option<usize>,
     prng_state: u64,
@@ -83,11 +159,6 @@ impl Default for ScientificView {
 
 impl ScientificView {
     pub fn new(saved_history: &[SavedSciHistoryItem], saved_angle_unit: u8) -> Self {
-        let angle_unit = match saved_angle_unit {
-            1 => AngleUnit::Rad,
-            2 => AngleUnit::Grad,
-            _ => AngleUnit::Deg,
-        };
         let history = saved_history
             .iter()
             .take(40)
@@ -100,7 +171,7 @@ impl ScientificView {
         Self {
             expr: String::new(),
             cursor: 0,
-            angle_unit,
+            angle_unit: AngleUnit::from_code(saved_angle_unit),
             display_mode: DisplayMode::Fraction,
             shift: false,
             hyp: false,
@@ -108,6 +179,7 @@ impl ScientificView {
             memory: None,
             committed: false,
             last_eval: None,
+            math_tree_cache: None,
             history,
             history_cursor: None,
             prng_state: 0x9E37_79B9_7F4A_7C15,
@@ -125,12 +197,21 @@ impl ScientificView {
                 result_plain: h.result_plain.clone(),
             })
             .collect();
-        let angle = match self.angle_unit {
-            AngleUnit::Deg => 0,
-            AngleUnit::Rad => 1,
-            AngleUnit::Grad => 2,
-        };
-        (hist, angle)
+        (hist, self.angle_unit.to_code())
+    }
+
+    fn ensure_math_tree(&mut self) -> &MathNode {
+        if self.math_tree_cache.as_ref().is_some_and(|c| c.expr != self.expr) {
+            self.math_tree_cache = None;
+        }
+        let expr = &self.expr;
+        &self
+            .math_tree_cache
+            .get_or_insert_with(|| CachedMathTree {
+                expr: expr.clone(),
+                tree: math_display::parse_math(expr),
+            })
+            .tree
     }
 
     fn clamp_cursor(&mut self) {
@@ -236,30 +317,17 @@ impl ScientificView {
         let last = slice.chars().next_back()?;
 
         if last == ')' {
-            // Walk back to matching `(`.
-            let mut depth = 0i32;
-            for (b, c) in slice.char_indices().rev() {
-                match c {
-                    ')' => depth += 1,
-                    '(' => {
-                        depth -= 1;
-                        if depth == 0 {
-                            // Include function name before `(` if any (e.g. `sin(30)`).
-                            let mut start = b;
-                            for (fb, fc) in slice[..b].char_indices().rev() {
-                                if fc.is_alphanumeric() || fc == '_' {
-                                    start = fb;
-                                } else {
-                                    break;
-                                }
-                            }
-                            return Some(start);
-                        }
-                    }
-                    _ => {}
+            let b = find_matching_open_paren(slice, slice.len() - 1)?;
+            // Include function name before `(` if any (e.g. `sin(30)`).
+            let mut start = b;
+            for (fb, fc) in slice[..b].char_indices().rev() {
+                if fc.is_alphanumeric() || fc == '_' {
+                    start = fb;
+                } else {
+                    break;
                 }
             }
-            return None;
+            return Some(start);
         }
 
         if last.is_alphanumeric() || matches!(last, '.' | '_' | 'π' | 'τ' | 'φ' | '²' | '³' | '!') {
@@ -461,23 +529,7 @@ impl ScientificView {
             && self.expr[self.cursor..].starts_with(')')
         {
             let num_close = self.cursor - 3;
-            // Find matching `(` of numerator
-            let mut d = 0i32;
-            let mut num_open = None;
-            for (b, c) in self.expr[..=num_close].char_indices().rev() {
-                match c {
-                    ')' => d += 1,
-                    '(' => {
-                        d -= 1;
-                        if d == 0 {
-                            num_open = Some(b);
-                            break;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            if let Some(open) = num_open {
+            if let Some(open) = find_matching_open_paren(&self.expr, num_close) {
                 let inner = self.expr[open + 1..num_close].to_owned();
                 let new_cursor = open + inner.len();
                 self.expr.replace_range(open..=self.cursor, &inner);
@@ -490,22 +542,7 @@ impl ScientificView {
         // Case 3: right after a closed fraction `(num)/(den)|` -> step inside denominator and delete
         if self.expr[..self.cursor].ends_with(')') {
             let close = self.cursor - 1;
-            let mut d = 0i32;
-            let mut open_pos = None;
-            for (b, c) in self.expr[..=close].char_indices().rev() {
-                match c {
-                    ')' => d += 1,
-                    '(' => {
-                        d -= 1;
-                        if d == 0 {
-                            open_pos = Some(b);
-                            break;
-                        }
-                    }
-                    _ => {}
-                }
-            }
-            if let Some(open) = open_pos
+            if let Some(open) = find_matching_open_paren(&self.expr, close)
                 && open >= 2
                 && self.expr[..open + 1].ends_with(")/(")
             {
@@ -823,6 +860,34 @@ impl ScientificView {
         (action, std::mem::take(&mut self.state_dirty))
     }
 
+    fn execute_key_action(&mut self, act: KeyAction, precision: u32) {
+        match act {
+            KeyAction::Insert { token, replace_on_commit } => {
+                self.insert_token(token, replace_on_commit);
+            }
+            KeyAction::InsertHyp { token, replace_on_commit } => {
+                self.insert_token(token, replace_on_commit);
+                self.hyp = false;
+            }
+            KeyAction::Fraction { mixed } => self.insert_fraction(mixed),
+            KeyAction::MemClear => self.memory = None,
+            KeyAction::MemStore => {
+                self.recompute();
+                if let Some(Ok(v)) = &self.last_eval {
+                    self.memory = Some(v.clone());
+                }
+            }
+            KeyAction::MemAdd(sign) => self.mem_add(sign),
+            KeyAction::Backspace => self.backspace(),
+            KeyAction::ClearAll => self.clear_all(),
+            KeyAction::Evaluate => self.evaluate_commit(precision),
+            KeyAction::Random => {
+                let r = self.next_random();
+                self.insert_token(&r, true);
+            }
+        }
+    }
+
     #[allow(clippy::too_many_arguments)]
     fn show_calculator_body(
         &mut self,
@@ -865,654 +930,602 @@ impl ScientificView {
                     content_h,
                 ));
 
-                // ── Interactive 2D Natural-V.P.A.M. Display ──
-                let disp_pad_x = (14.0 * scale).clamp(10.0, 22.0);
-                let disp_pad_y = (10.0 * scale).clamp(8.0, 14.0);
-                Frame::new()
-                    .fill(palette.bg_crust)
-                    .stroke(Stroke::new(1.0, palette.border_subtle))
-                    .corner_radius(CornerRadius::same(10))
-                    .inner_margin(Margin::symmetric(disp_pad_x as i8, disp_pad_y as i8))
-                    .show(ui, |ui| {
-                        ui.spacing_mut().item_spacing.y = 0.0;
-                        let inner_disp_h = (display_h - disp_pad_y * 2.0).max(124.0);
-                        ui.set_min_height(inner_disp_h);
-
-                        let tag_fs = (10.5 * scale).clamp(9.5, 13.5);
-                        ui.horizontal(|ui| {
-                            paint_status_tag(ui, "SHIFT", self.shift, palette.warning, tag_fs, palette);
-                            paint_status_tag(ui, "HYP", self.hyp, palette.accent, tag_fs, palette);
-
-                            let deg_resp = style::paint_pill(
-                                ui,
-                                self.angle_unit.label(),
-                                Palette::alpha(palette.syn_unit, 32),
-                                palette.syn_unit,
-                                Stroke::new(1.0, Palette::alpha(palette.syn_unit, 110)),
-                                tag_fs,
-                            )
-                            .on_hover_cursor(CursorIcon::PointingHand);
-                            if deg_resp.clicked() {
-                                self.angle_unit = self.angle_unit.next();
-                                self.state_dirty = true;
-                                self.recompute();
-                            }
-
-                            let mode_label = match self.display_mode {
-                                DisplayMode::Fraction => "FRAC",
-                                DisplayMode::MixedFraction => "a b/c",
-                                DisplayMode::Decimal => "DEC",
-                                DisplayMode::Engineering => "ENG",
-                            };
-                            let mode_resp = style::paint_pill(
-                                ui,
-                                mode_label,
-                                Palette::alpha(palette.accent_alt, 28),
-                                palette.accent_alt,
-                                Stroke::new(1.0, Palette::alpha(palette.accent_alt, 100)),
-                                tag_fs,
-                            )
-                            .on_hover_cursor(CursorIcon::PointingHand);
-                            if mode_resp.clicked() {
-                                self.display_mode = match self.display_mode {
-                                    DisplayMode::Fraction => DisplayMode::MixedFraction,
-                                    DisplayMode::MixedFraction => DisplayMode::Decimal,
-                                    DisplayMode::Decimal => DisplayMode::Engineering,
-                                    DisplayMode::Engineering => DisplayMode::Fraction,
-                                };
-                            }
-
-                            if let Some(m) = &self.memory {
-                                let m_str = m.plain(6);
-                                paint_status_tag(ui, "M", true, palette.syn_number, tag_fs, palette)
-                                    .on_hover_text(format!("M = {m_str}"));
-                            }
-
-                            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                                if !self.expr.trim().is_empty() && !self.has_empty_slot() {
-                                    let send_btn = ui
-                                        .add(
-                                            egui::Button::new(
-                                                egui::RichText::new(s.prog_send_notebook)
-                                                    .size((11.5 * scale).clamp(10.5, 14.0))
-                                                    .color(palette.text_secondary),
-                                            )
-                                            .frame(false),
-                                        )
-                                        .on_hover_cursor(CursorIcon::PointingHand);
-                                    if send_btn.clicked() {
-                                        *action = SciAction::SendToNotebook(self.expr.trim().to_owned());
-                                    }
-                                }
-                            });
-                        });
-
-                        // ── 2D Interactive Math Canvas (click numerator/denominator/chars) ──
-                        ui.add_space(4.0);
-                        let res_h = (inner_disp_h * 0.30).clamp(38.0, 72.0);
-                        let input_fs = (13.0 * scale).clamp(11.5, 16.0);
-                        let est_input_h = input_fs + 6.0;
-                        let est_tags_h = tag_fs + 14.0;
-                        let math_area_h =
-                            (inner_disp_h - est_tags_h - est_input_h - res_h - 12.0).max(52.0);
-                        let (math_rect, math_resp) = ui.allocate_exact_size(
-                            Vec2::new(ui.available_width(), math_area_h),
-                            Sense::click(),
-                        );
-
-                        if math_resp.hovered() {
-                            ui.ctx().set_cursor_icon(CursorIcon::Text);
-                        }
-                        let hover_pos = math_resp.hover_pos();
-
-                        let mut fb = PaintFeedback::default();
-                        if !self.expr.is_empty() {
-                            self.clamp_cursor();
-                            let tree = math_display::parse_math(&self.expr);
-                            let mut fs = (23.0 * scale).clamp(17.0, 34.0);
-                            let max_w = (math_rect.width() - 10.0).max(80.0);
-                            let max_h = (math_rect.height() - 4.0).max(32.0);
-
-                            let mut m = math_display::measure(&tree, ui.painter(), fs);
-                            for _ in 0..4 {
-                                let fit = (max_w / m.width.max(1.0)).min(max_h / m.height().max(1.0));
-                                if fit >= 0.99 || fs <= 8.0 {
-                                    break;
-                                }
-                                fs = (fs * fit * 0.97).max(8.0);
-                                m = math_display::measure(&tree, ui.painter(), fs);
-                            }
-
-                            let top_y = math_rect.top() + (math_rect.height() - m.height()) * 0.5;
-                            let mid_y = top_y + m.above;
-                            let clipped = ui.painter().with_clip_rect(math_rect);
-                            math_display::paint_interactive(
-                                &tree,
-                                &clipped,
-                                math_rect.left() + 6.0,
-                                mid_y,
-                                fs,
-                                self.cursor,
-                                hover_pos,
-                                palette,
-                                &mut fb,
-                            );
-
-                            // Paint smooth blinking caret inside the 2D formula
-                            if !input_focused
-                                && let Some(caret) = fb.caret
-                            {
-                                let t = ui.ctx().input(|i| i.time);
-                                let blink = ((t * 5.2).sin() * 0.5 + 0.5) as f32;
-                                let alpha = (70.0 + blink * 185.0) as u8;
-                                clipped.line_segment(
-                                    [Pos2::new(caret.x, caret.top_y), Pos2::new(caret.x, caret.bot_y)],
-                                    Stroke::new(2.0, Palette::alpha(palette.accent, alpha)),
-                                );
-                                ui.ctx().request_repaint_after(std::time::Duration::from_millis(60));
-                            }
-
-                            // Click anywhere inside the 2D expression to position caret precisely!
-                            if math_resp.clicked()
-                                && let Some(click_pos) = math_resp.interact_pointer_pos()
-                            {
-                                self.cursor = fb.byte_at_pos(click_pos, self.expr.len());
-                                self.clamp_cursor();
-                                self.committed = false;
-                                ui.ctx().memory_mut(|mem| mem.surrender_focus(input_id));
-                            }
-                        } else {
-                            let caret_x = math_rect.left() + 6.0;
-                            let h = (20.0 * scale).clamp(16.0, 28.0);
-                            if !input_focused {
-                                let t = ui.ctx().input(|i| i.time);
-                                let blink = ((t * 5.2).sin() * 0.5 + 0.5) as f32;
-                                let alpha = (70.0 + blink * 185.0) as u8;
-                                ui.painter().line_segment(
-                                    [
-                                        Pos2::new(caret_x, math_rect.center().y - h * 0.5),
-                                        Pos2::new(caret_x, math_rect.center().y + h * 0.5),
-                                    ],
-                                    Stroke::new(2.0, Palette::alpha(palette.accent, alpha)),
-                                );
-                                ui.ctx().request_repaint_after(std::time::Duration::from_millis(60));
-                            }
-                            ui.painter().text(
-                                Pos2::new(caret_x + 6.0, math_rect.center().y),
-                                Align2::LEFT_CENTER,
-                                "2/3 + 1/6",
-                                FontId::monospace((19.0 * scale).clamp(15.0, 26.0)),
-                                Palette::alpha(palette.text_muted, 95),
-                            );
-                        }
-
-                        ui.add_space(4.0);
-
-                        // Compact synchronized raw text bar (clicking here edits raw text directly)
-                        let err_span_opt = self
-                            .last_eval
-                            .as_ref()
-                            .and_then(|r| r.as_ref().err())
-                            .map(|e| e.span.clone());
-                        let mut layouter = |ui: &Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
-                            let job = style::build_singleline_highlight(
-                                buf.as_str(),
-                                false,
-                                err_span_opt.as_ref(),
-                                input_fs,
-                                wrap_width,
-                                palette,
-                            );
-                            ui.painter().layout_job(job)
-                        };
-
-                        let expr_w = ui.available_width();
-                        let out = TextEdit::singleline(&mut self.expr)
-                            .id(input_id)
-                            .frame(Frame::NONE)
-                            .desired_width(expr_w)
-                            .hint_text("...")
-                            .layouter(&mut layouter)
-                            .show(ui);
-                        if out.response.changed() {
-                            self.committed = false;
-                            self.history_cursor = None;
-                            if let Some(cr) = out.cursor_range {
-                                let ci: usize = cr.primary.index.into();
-                                self.cursor = char_to_byte_idx(&self.expr, ci);
-                            } else {
-                                self.cursor = self.expr.len();
-                            }
-                            self.recompute();
-                        } else if out.response.has_focus()
-                            && let Some(cr) = out.cursor_range
-                        {
-                            let ci: usize = cr.primary.index.into();
-                            self.cursor = char_to_byte_idx(&self.expr, ci);
-                        }
-                        if out.response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
-                            self.evaluate_commit(precision);
-                        }
-
-                        ui.add_space(4.0);
-
-                        // ── Large Result Area (stacked fraction when in FRAC / a b/c mode) ──
-                        let (res_rect, res_resp) = ui.allocate_exact_size(
-                            Vec2::new(ui.available_width(), res_h),
-                            Sense::click(),
-                        );
-
-                        let res_fs = (26.0 * scale).clamp(21.0, 40.0);
-                        match &self.last_eval {
-                            Some(Ok(val)) => {
-                                let (main_str, alt_str) = self.format_value_text(val, precision);
-                                let plain = val.plain(precision);
-                                let res_col = if self.committed {
-                                    palette.success
-                                } else {
-                                    Palette::alpha(palette.text_primary, 210)
-                                };
-
-                                if res_resp.hovered() {
-                                    ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
-                                    ui.painter().rect_filled(
-                                        res_rect,
-                                        CornerRadius::same(6),
-                                        Palette::alpha(palette.bg_elevated, 120),
-                                    );
-                                }
-
-                                if let Some(alt) = &alt_str {
-                                    ui.painter().text(
-                                        Pos2::new(res_rect.left() + 4.0, res_rect.center().y),
-                                        Align2::LEFT_CENTER,
-                                        alt,
-                                        FontId::monospace((13.0 * scale).clamp(11.5, 17.5)),
-                                        palette.text_muted,
-                                    );
-                                }
-
-                                let frac_pair = if val.is_dimensionless()
-                                    && matches!(
-                                        self.display_mode,
-                                        DisplayMode::Fraction | DisplayMode::MixedFraction
-                                    ) {
-                                    decimal_to_fraction(val.si, 10_000)
-                                } else {
-                                    None
-                                };
-
-                                if let Some((num, den)) = frac_pair {
-                                    math_display::paint_stacked_fraction_result(
-                                        ui.painter(),
-                                        res_rect,
-                                        num,
-                                        den,
-                                        self.display_mode == DisplayMode::MixedFraction,
-                                        res_fs,
-                                        res_col,
-                                    );
-                                } else {
-                                    ui.painter().text(
-                                        Pos2::new(res_rect.right() - 4.0, res_rect.center().y),
-                                        Align2::RIGHT_CENTER,
-                                        &main_str,
-                                        FontId::monospace(res_fs),
-                                        res_col,
-                                    );
-                                }
-
-                                if res_resp.clicked() {
-                                    *action = SciAction::Copy {
-                                        text: plain,
-                                        label: main_str,
-                                    };
-                                }
-                            }
-                            Some(Err(err)) => {
-                                let msg = format_error(lang, &err.kind);
-                                ui.painter().text(
-                                    Pos2::new(res_rect.right() - 4.0, res_rect.center().y),
-                                    Align2::RIGHT_CENTER,
-                                    msg,
-                                    FontId::proportional((13.5 * scale).clamp(12.0, 18.0)),
-                                    palette.error,
-                                );
-                            }
-                            None => {
-                                let placeholder = if self.has_empty_slot() { "…" } else { "0" };
-                                ui.painter().text(
-                                    Pos2::new(res_rect.right() - 4.0, res_rect.center().y),
-                                    Align2::RIGHT_CENTER,
-                                    placeholder,
-                                    FontId::monospace(res_fs),
-                                    palette.text_muted,
-                                );
-                            }
-                        }
-                    });
+                self.show_display_panel(
+                    ui,
+                    display_h,
+                    scale,
+                    input_id,
+                    input_focused,
+                    lang,
+                    s,
+                    precision,
+                    palette,
+                    action,
+                );
 
                 ui.add_space(gap_y + 2.0);
 
-                // ── Top control row: SHIFT, HYP, DEG/RAD, ◀, ▶, ▲/▼, S⇔D, ENG ──
                 let avail_w = ui.available_width();
-                let ctrl_w = (avail_w - gap_x * 7.0) / 8.0;
-                ui.horizontal(|ui| {
-                    ui.spacing_mut().item_spacing.x = gap_x;
-                    if paint_sci_key(
-                        ui,
-                        "SHIFT",
-                        "",
-                        Vec2::new(ctrl_w, ctrl_h),
-                        KeyTone::Shift,
-                        self.shift,
-                        false,
-                        scale,
-                        palette,
-                    ) {
-                        self.shift = !self.shift;
-                    }
-                    if paint_sci_key(
-                        ui,
-                        "HYP",
-                        "",
-                        Vec2::new(ctrl_w, ctrl_h),
-                        KeyTone::Sci,
-                        self.hyp,
-                        false,
-                        scale,
-                        palette,
-                    ) {
-                        self.hyp = !self.hyp;
-                    }
-                    if paint_sci_key(
-                        ui,
-                        self.angle_unit.label(),
-                        "",
-                        Vec2::new(ctrl_w, ctrl_h),
-                        KeyTone::Sci,
-                        false,
-                        false,
-                        scale,
-                        palette,
-                    ) {
-                        self.angle_unit = self.angle_unit.next();
-                        self.state_dirty = true;
-                        self.recompute();
-                    }
-                    if paint_sci_key(
-                        ui,
-                        "◀",
-                        "",
-                        Vec2::new(ctrl_w, ctrl_h),
-                        KeyTone::Sci,
-                        false,
-                        false,
-                        scale,
-                        palette,
-                    ) {
-                        self.move_left();
-                    }
-                    if paint_sci_key(
-                        ui,
-                        "▶",
-                        "",
-                        Vec2::new(ctrl_w, ctrl_h),
-                        KeyTone::Sci,
-                        false,
-                        false,
-                        scale,
-                        palette,
-                    ) {
-                        self.move_right();
-                    }
-                    if paint_sci_key(
-                        ui,
-                        "▼",
-                        "▲",
-                        Vec2::new(ctrl_w, ctrl_h),
-                        KeyTone::Sci,
-                        false,
-                        self.shift,
-                        scale,
-                        palette,
-                    ) {
-                        if std::mem::take(&mut self.shift) {
-                            if !self.jump_fraction_up() {
-                                self.history_step(1);
-                            }
-                        } else if !self.jump_fraction_down() {
-                            self.history_step(-1);
-                        }
-                    }
-                    if paint_sci_key(
-                        ui,
-                        "S⇔D",
-                        "a b/c",
-                        Vec2::new(ctrl_w, ctrl_h),
-                        KeyTone::Sci,
-                        matches!(self.display_mode, DisplayMode::Fraction | DisplayMode::MixedFraction),
-                        self.shift,
-                        scale,
-                        palette,
-                    ) {
-                        if std::mem::take(&mut self.shift) {
-                            self.display_mode = if self.display_mode == DisplayMode::MixedFraction {
-                                DisplayMode::Fraction
-                            } else {
-                                DisplayMode::MixedFraction
-                            };
-                        } else {
-                            self.display_mode = match self.display_mode {
-                                DisplayMode::Fraction | DisplayMode::MixedFraction => DisplayMode::Decimal,
-                                DisplayMode::Decimal | DisplayMode::Engineering => DisplayMode::Fraction,
-                            };
-                        }
-                    }
-                    if paint_sci_key(
-                        ui,
-                        "ENG",
-                        "",
-                        Vec2::new(ctrl_w, ctrl_h),
-                        KeyTone::Sci,
-                        self.display_mode == DisplayMode::Engineering,
-                        false,
-                        scale,
-                        palette,
-                    ) {
-                        self.display_mode = if self.display_mode == DisplayMode::Engineering {
-                            DisplayMode::Decimal
-                        } else {
-                            DisplayMode::Engineering
-                        };
-                    }
-                });
+                self.show_control_row(ui, avail_w, ctrl_h, gap_x, scale, palette);
 
                 ui.add_space(gap_y + 1.0);
-
-                // ── Scientific function rows (6 columns × 3 rows) ──
-                let sci_w = (avail_w - gap_x * 5.0) / 6.0;
-                let sci_size = Vec2::new(sci_w, sci_h);
-
-                let sin_lbl = if self.hyp { "sinh" } else { "sin" };
-                let sin_sh = if self.hyp { "sinh⁻¹" } else { "sin⁻¹" };
-                let cos_lbl = if self.hyp { "cosh" } else { "cos" };
-                let cos_sh = if self.hyp { "cosh⁻¹" } else { "cos⁻¹" };
-                let tan_lbl = if self.hyp { "tanh" } else { "tan" };
-                let tan_sh = if self.hyp { "tanh⁻¹" } else { "tan⁻¹" };
-
-                type SciKeySpec<'a> = (&'a str, &'a str, &'a str, &'a str, bool);
-                let sci_rows: [[SciKeySpec<'_>; 6]; 3] = [
-                    [
-                        ("__FRAC_ICON__", "a b/c", "__FRAC__", "__MFRAC__", false),
-                        ("x⁻¹", "x!", "^(-1)", "!", false),
-                        ("√", "∛", "sqrt(", "cbrt(", true),
-                        ("x²", "x³", "²", "³", false),
-                        ("xʸ", "ʸ√x", "^", "^(1/", false),
-                        ("log", "10ˣ", "log(", "10^(", true),
-                    ],
-                    [
-                        ("ln", "eˣ", "ln(", "exp(", true),
-                        ("(-)", "Abs", "-", "abs(", true),
-                        (
-                            sin_lbl,
-                            sin_sh,
-                            if self.hyp { "sinh(" } else { "sin(" },
-                            if self.hyp { "asinh(" } else { "asin(" },
-                            true,
-                        ),
-                        (
-                            cos_lbl,
-                            cos_sh,
-                            if self.hyp { "cosh(" } else { "cos(" },
-                            if self.hyp { "acosh(" } else { "acos(" },
-                            true,
-                        ),
-                        (
-                            tan_lbl,
-                            tan_sh,
-                            if self.hyp { "tanh(" } else { "tan(" },
-                            if self.hyp { "atanh(" } else { "atan(" },
-                            true,
-                        ),
-                        ("π", "e", "pi", "e", true),
-                    ],
-                    [
-                        ("(", "%", "(", "%", true),
-                        (")", ",", ")", ", ", false),
-                        ("MC", "STO", "__MC__", "__STO__", false),
-                        ("MR", "φ", "M", "phi", true),
-                        ("M-", "τ", "__M-__", "tau", false),
-                        ("M+", "log₂", "__M+__", "log2(", false),
-                    ],
-                ];
-
-                for (s_idx, row) in sci_rows.into_iter().enumerate() {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = gap_x;
-                        for (main_lbl, shift_lbl, main_ins, shift_ins, replace_on_commit) in row {
-                            if paint_sci_key(
-                                ui,
-                                main_lbl,
-                                shift_lbl,
-                                sci_size,
-                                KeyTone::Sci,
-                                false,
-                                self.shift,
-                                scale,
-                                palette,
-                            ) {
-                                let shifted = std::mem::take(&mut self.shift);
-                                let tok = if shifted { shift_ins } else { main_ins };
-                                match tok {
-                                    "__FRAC__" => self.insert_fraction(false),
-                                    "__MFRAC__" => self.insert_fraction(true),
-                                    "__MC__" => self.memory = None,
-                                    "__STO__" => {
-                                        self.recompute();
-                                        if let Some(Ok(v)) = &self.last_eval {
-                                            self.memory = Some(v.clone());
-                                        }
-                                    }
-                                    "__M+__" => self.mem_add(1),
-                                    "__M-__" => self.mem_add(-1),
-                                    _ => {
-                                        self.insert_token(tok, replace_on_commit && !shifted);
-                                        if matches!(
-                                            tok,
-                                            "sinh(" | "cosh(" | "tanh(" | "asinh(" | "acosh(" | "atanh("
-                                        ) {
-                                            self.hyp = false;
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    });
-                    if s_idx + 1 < 3 {
-                        ui.add_space(gap_y);
-                    }
-                }
+                self.show_sci_keypad(ui, avail_w, sci_h, gap_x, gap_y, scale, precision, palette);
 
                 ui.add_space(gap_y + 1.0);
                 style::hairline_h(ui, palette.border_subtle);
                 ui.add_space(gap_y + 1.0);
 
-                // ── Main numeric & operator keypad (5 columns × 4 rows) ──
-                let num_w = (avail_w - gap_x * 4.0) / 5.0;
-                let num_size = Vec2::new(num_w, num_h);
+                self.show_num_keypad(ui, avail_w, num_h, gap_x, gap_y, scale, precision, palette);
+            });
+    }
 
-                type NumKeySpec<'a> = (&'a str, &'a str, &'a str, &'a str, KeyTone, bool);
-                let num_rows: [[NumKeySpec<'_>; 5]; 4] = [
-                    [
-                        ("7", "nPr", "7", "nPr(", KeyTone::Digit, true),
-                        ("8", "nCr", "8", "nCr(", KeyTone::Digit, true),
-                        ("9", "gcd", "9", "gcd(", KeyTone::Digit, true),
-                        ("DEL", "", "__DEL__", "__DEL__", KeyTone::Danger, false),
-                        ("AC", "", "__AC__", "__AC__", KeyTone::Danger, false),
-                    ],
-                    [
-                        ("4", "lcm", "4", "lcm(", KeyTone::Digit, true),
-                        ("5", "hypot", "5", "hypot(", KeyTone::Digit, true),
-                        ("6", "round", "6", "round(", KeyTone::Digit, true),
-                        ("×", "xʸ", " * ", "^", KeyTone::Op, false),
-                        ("÷", "mod", " / ", " mod ", KeyTone::Op, false),
-                    ],
-                    [
-                        ("1", "floor", "1", "floor(", KeyTone::Digit, true),
-                        ("2", "ceil", "2", "ceil(", KeyTone::Digit, true),
-                        ("3", "abs", "3", "abs(", KeyTone::Digit, true),
-                        ("+", "min", " + ", "min(", KeyTone::Op, false),
-                        ("−", "max", " - ", "max(", KeyTone::Op, false),
-                    ],
-                    [
-                        ("0", "Rnd", "0", "round(", KeyTone::Digit, true),
-                        (".", "Ran#", ".", "__RAN__", KeyTone::Digit, false),
-                        ("×10ˣ", "π", " * 10^", "pi", KeyTone::Digit, false),
-                        ("Ans", "%", "ans", "%", KeyTone::Op, true),
-                        ("=", "", "__EQ__", "__EQ__", KeyTone::Accent, false),
-                    ],
-                ];
+    #[allow(clippy::too_many_arguments)]
+    fn show_display_panel(
+        &mut self,
+        ui: &mut Ui,
+        display_h: f32,
+        scale: f32,
+        input_id: Id,
+        input_focused: bool,
+        lang: Lang,
+        s: &Strings,
+        precision: u32,
+        palette: &Palette,
+        action: &mut SciAction,
+    ) {
+        let disp_pad_x = (14.0 * scale).clamp(10.0, 22.0);
+        let disp_pad_y = (10.0 * scale).clamp(8.0, 14.0);
+        Frame::new()
+            .fill(palette.bg_crust)
+            .stroke(Stroke::new(1.0, palette.border_subtle))
+            .corner_radius(CornerRadius::same(10))
+            .inner_margin(Margin::symmetric(disp_pad_x as i8, disp_pad_y as i8))
+            .show(ui, |ui| {
+                ui.spacing_mut().item_spacing.y = 0.0;
+                let inner_disp_h = (display_h - disp_pad_y * 2.0).max(124.0);
+                ui.set_min_height(inner_disp_h);
 
-                for (r_idx, row) in num_rows.into_iter().enumerate() {
-                    ui.horizontal(|ui| {
-                        ui.spacing_mut().item_spacing.x = gap_x;
-                        for (main_lbl, shift_lbl, main_ins, shift_ins, tone, replace_on_commit) in row {
-                            if paint_sci_key(
-                                ui,
-                                main_lbl,
-                                shift_lbl,
-                                num_size,
-                                tone,
-                                false,
-                                self.shift,
-                                scale,
-                                palette,
-                            ) {
-                                let shifted = std::mem::take(&mut self.shift);
-                                let tok = if shifted && !shift_ins.is_empty() {
-                                    shift_ins
-                                } else {
-                                    main_ins
-                                };
-                                match tok {
-                                    "__DEL__" => self.backspace(),
-                                    "__AC__" => self.clear_all(),
-                                    "__EQ__" => self.evaluate_commit(precision),
-                                    "__RAN__" => {
-                                        let r = self.next_random();
-                                        self.insert_token(&r, true);
-                                    }
-                                    _ => self.insert_token(tok, replace_on_commit),
-                                }
+                let tag_fs = (10.5 * scale).clamp(9.5, 13.5);
+                ui.horizontal(|ui| {
+                    paint_status_tag(ui, "SHIFT", self.shift, palette.warning, tag_fs, palette);
+                    paint_status_tag(ui, "HYP", self.hyp, palette.accent, tag_fs, palette);
+
+                    let deg_resp = style::paint_pill(
+                        ui,
+                        self.angle_unit.label(),
+                        Palette::alpha(palette.syn_unit, 32),
+                        palette.syn_unit,
+                        Stroke::new(1.0, Palette::alpha(palette.syn_unit, 110)),
+                        tag_fs,
+                    )
+                    .on_hover_cursor(CursorIcon::PointingHand);
+                    if deg_resp.clicked() {
+                        self.angle_unit = self.angle_unit.next();
+                        self.state_dirty = true;
+                        self.recompute();
+                    }
+
+                    let mode_label = match self.display_mode {
+                        DisplayMode::Fraction => "FRAC",
+                        DisplayMode::MixedFraction => "a b/c",
+                        DisplayMode::Decimal => "DEC",
+                        DisplayMode::Engineering => "ENG",
+                    };
+                    let mode_resp = style::paint_pill(
+                        ui,
+                        mode_label,
+                        Palette::alpha(palette.accent_alt, 28),
+                        palette.accent_alt,
+                        Stroke::new(1.0, Palette::alpha(palette.accent_alt, 100)),
+                        tag_fs,
+                    )
+                    .on_hover_cursor(CursorIcon::PointingHand);
+                    if mode_resp.clicked() {
+                        self.display_mode = match self.display_mode {
+                            DisplayMode::Fraction => DisplayMode::MixedFraction,
+                            DisplayMode::MixedFraction => DisplayMode::Decimal,
+                            DisplayMode::Decimal => DisplayMode::Engineering,
+                            DisplayMode::Engineering => DisplayMode::Fraction,
+                        };
+                    }
+
+                    if let Some(m) = &self.memory {
+                        let m_str = m.plain(6);
+                        paint_status_tag(ui, "M", true, palette.syn_number, tag_fs, palette)
+                            .on_hover_text(format!("M = {m_str}"));
+                    }
+
+                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if !self.expr.trim().is_empty() && !self.has_empty_slot() {
+                            let send_btn = ui
+                                .add(
+                                    egui::Button::new(
+                                        egui::RichText::new(s.prog_send_notebook)
+                                            .size((11.5 * scale).clamp(10.5, 14.0))
+                                            .color(palette.text_secondary),
+                                    )
+                                    .frame(false),
+                                )
+                                .on_hover_cursor(CursorIcon::PointingHand);
+                            if send_btn.clicked() {
+                                *action = SciAction::SendToNotebook(self.expr.trim().to_owned());
                             }
                         }
                     });
-                    if r_idx + 1 < 4 {
-                        ui.add_space(gap_y);
+                });
+
+                // ── 2D Interactive Math Canvas (click numerator/denominator/chars) ──
+                ui.add_space(4.0);
+                let res_h = (inner_disp_h * 0.30).clamp(38.0, 72.0);
+                let input_fs = (13.0 * scale).clamp(11.5, 16.0);
+                let est_input_h = input_fs + 6.0;
+                let est_tags_h = tag_fs + 14.0;
+                let math_area_h =
+                    (inner_disp_h - est_tags_h - est_input_h - res_h - 12.0).max(52.0);
+                let (math_rect, math_resp) = ui.allocate_exact_size(
+                    Vec2::new(ui.available_width(), math_area_h),
+                    Sense::click(),
+                );
+
+                if math_resp.hovered() {
+                    ui.ctx().set_cursor_icon(CursorIcon::Text);
+                }
+                let hover_pos = math_resp.hover_pos();
+
+                let mut fb = PaintFeedback::default();
+                if !self.expr.is_empty() {
+                    self.clamp_cursor();
+                    let cursor_byte = self.cursor;
+                    let tree = self.ensure_math_tree();
+                    let mut fs = (23.0 * scale).clamp(17.0, 34.0);
+                    let max_w = (math_rect.width() - 10.0).max(80.0);
+                    let max_h = (math_rect.height() - 4.0).max(32.0);
+
+                    let mut m = math_display::measure(tree, ui.painter(), fs);
+                    for _ in 0..4 {
+                        let fit = (max_w / m.width.max(1.0)).min(max_h / m.height().max(1.0));
+                        if fit >= 0.99 || fs <= 8.0 {
+                            break;
+                        }
+                        fs = (fs * fit * 0.97).max(8.0);
+                        m = math_display::measure(tree, ui.painter(), fs);
+                    }
+
+                    let top_y = math_rect.top() + (math_rect.height() - m.height()) * 0.5;
+                    let mid_y = top_y + m.above;
+                    let clipped = ui.painter().with_clip_rect(math_rect);
+                    math_display::paint_interactive(
+                        tree,
+                        &clipped,
+                        math_rect.left() + 6.0,
+                        mid_y,
+                        fs,
+                        cursor_byte,
+                        hover_pos,
+                        palette,
+                        &mut fb,
+                    );
+
+                    if !input_focused
+                        && let Some(caret) = fb.caret
+                    {
+                        paint_blinking_caret(
+                            ui.ctx(),
+                            &clipped,
+                            caret.x,
+                            caret.top_y,
+                            caret.bot_y,
+                            palette,
+                        );
+                    }
+
+                    if math_resp.clicked()
+                        && let Some(click_pos) = math_resp.interact_pointer_pos()
+                    {
+                        self.cursor = fb.byte_at_pos(click_pos, self.expr.len());
+                        self.clamp_cursor();
+                        self.committed = false;
+                        ui.ctx().memory_mut(|mem| mem.surrender_focus(input_id));
+                    }
+                } else {
+                    let caret_x = math_rect.left() + 6.0;
+                    let h = (20.0 * scale).clamp(16.0, 28.0);
+                    if !input_focused {
+                        paint_blinking_caret(
+                            ui.ctx(),
+                            ui.painter(),
+                            caret_x,
+                            math_rect.center().y - h * 0.5,
+                            math_rect.center().y + h * 0.5,
+                            palette,
+                        );
+                    }
+                    ui.painter().text(
+                        Pos2::new(caret_x + 6.0, math_rect.center().y),
+                        Align2::LEFT_CENTER,
+                        "2/3 + 1/6",
+                        FontId::monospace((19.0 * scale).clamp(15.0, 26.0)),
+                        Palette::alpha(palette.text_muted, 95),
+                    );
+                }
+
+                ui.add_space(4.0);
+
+                // Compact synchronized raw text bar
+                let err_span_opt = self
+                    .last_eval
+                    .as_ref()
+                    .and_then(|r| r.as_ref().err())
+                    .map(|e| e.span.clone());
+                let mut layouter =
+                    style::singleline_layouter(false, err_span_opt.as_ref(), input_fs, palette);
+
+                let expr_w = ui.available_width();
+                let out = TextEdit::singleline(&mut self.expr)
+                    .id(input_id)
+                    .frame(Frame::NONE)
+                    .desired_width(expr_w)
+                    .hint_text("...")
+                    .layouter(&mut layouter)
+                    .show(ui);
+                if out.response.changed() {
+                    self.committed = false;
+                    self.history_cursor = None;
+                    if let Some(cr) = out.cursor_range {
+                        let ci: usize = cr.primary.index.into();
+                        self.cursor = char_to_byte_idx(&self.expr, ci);
+                    } else {
+                        self.cursor = self.expr.len();
+                    }
+                    self.recompute();
+                } else if out.response.has_focus()
+                    && let Some(cr) = out.cursor_range
+                {
+                    let ci: usize = cr.primary.index.into();
+                    self.cursor = char_to_byte_idx(&self.expr, ci);
+                }
+                if out.response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter)) {
+                    self.evaluate_commit(precision);
+                }
+
+                ui.add_space(4.0);
+
+                // ── Large Result Area ──
+                let (res_rect, res_resp) = ui.allocate_exact_size(
+                    Vec2::new(ui.available_width(), res_h),
+                    Sense::click(),
+                );
+
+                let res_fs = (26.0 * scale).clamp(21.0, 40.0);
+                match &self.last_eval {
+                    Some(Ok(val)) => {
+                        let (main_str, alt_str) = self.format_value_text(val, precision);
+                        let plain = val.plain(precision);
+                        let res_col = if self.committed {
+                            palette.success
+                        } else {
+                            Palette::alpha(palette.text_primary, 210)
+                        };
+
+                        if res_resp.hovered() {
+                            ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                            ui.painter().rect_filled(
+                                res_rect,
+                                CornerRadius::same(6),
+                                Palette::alpha(palette.bg_elevated, 120),
+                            );
+                        }
+
+                        if let Some(alt) = &alt_str {
+                            ui.painter().text(
+                                Pos2::new(res_rect.left() + 4.0, res_rect.center().y),
+                                Align2::LEFT_CENTER,
+                                alt,
+                                FontId::monospace((13.0 * scale).clamp(11.5, 17.5)),
+                                palette.text_muted,
+                            );
+                        }
+
+                        let frac_pair = if val.is_dimensionless()
+                            && matches!(
+                                self.display_mode,
+                                DisplayMode::Fraction | DisplayMode::MixedFraction
+                            ) {
+                            decimal_to_fraction(val.si, 10_000)
+                        } else {
+                            None
+                        };
+
+                        if let Some((num, den)) = frac_pair {
+                            math_display::paint_stacked_fraction_result(
+                                ui.painter(),
+                                res_rect,
+                                num,
+                                den,
+                                self.display_mode == DisplayMode::MixedFraction,
+                                res_fs,
+                                res_col,
+                            );
+                        } else {
+                            ui.painter().text(
+                                Pos2::new(res_rect.right() - 4.0, res_rect.center().y),
+                                Align2::RIGHT_CENTER,
+                                &main_str,
+                                FontId::monospace(res_fs),
+                                res_col,
+                            );
+                        }
+
+                        if res_resp.clicked() {
+                            *action = SciAction::Copy {
+                                text: plain,
+                                label: main_str,
+                            };
+                        }
+                    }
+                    Some(Err(err)) => {
+                        let msg = format_error(lang, &err.kind);
+                        ui.painter().text(
+                            Pos2::new(res_rect.right() - 4.0, res_rect.center().y),
+                            Align2::RIGHT_CENTER,
+                            msg,
+                            FontId::proportional((13.5 * scale).clamp(12.0, 18.0)),
+                            palette.error,
+                        );
+                    }
+                    None => {
+                        let placeholder = if self.has_empty_slot() { "…" } else { "0" };
+                        ui.painter().text(
+                            Pos2::new(res_rect.right() - 4.0, res_rect.center().y),
+                            Align2::RIGHT_CENTER,
+                            placeholder,
+                            FontId::monospace(res_fs),
+                            palette.text_muted,
+                        );
                     }
                 }
             });
+    }
+
+    fn show_control_row(
+        &mut self,
+        ui: &mut Ui,
+        avail_w: f32,
+        ctrl_h: f32,
+        gap_x: f32,
+        scale: f32,
+        palette: &Palette,
+    ) {
+        let ctrl_w = (avail_w - gap_x * 7.0) / 8.0;
+        let ctrl_size = Vec2::new(ctrl_w, ctrl_h);
+        ui.horizontal(|ui| {
+            ui.spacing_mut().item_spacing.x = gap_x;
+            if paint_sci_key(ui, KeyLabel::Text("SHIFT"), "", ctrl_size, KeyTone::Shift, self.shift, false, scale, palette) {
+                self.shift = !self.shift;
+            }
+            if paint_sci_key(ui, KeyLabel::Text("HYP"), "", ctrl_size, KeyTone::Sci, self.hyp, false, scale, palette) {
+                self.hyp = !self.hyp;
+            }
+            if paint_sci_key(ui, KeyLabel::Text(self.angle_unit.label()), "", ctrl_size, KeyTone::Sci, false, false, scale, palette) {
+                self.angle_unit = self.angle_unit.next();
+                self.state_dirty = true;
+                self.recompute();
+            }
+            if paint_sci_key(ui, KeyLabel::Text("◀"), "", ctrl_size, KeyTone::Sci, false, false, scale, palette) {
+                self.move_left();
+            }
+            if paint_sci_key(ui, KeyLabel::Text("▶"), "", ctrl_size, KeyTone::Sci, false, false, scale, palette) {
+                self.move_right();
+            }
+            if paint_sci_key(ui, KeyLabel::Text("▼"), "▲", ctrl_size, KeyTone::Sci, false, self.shift, scale, palette) {
+                if std::mem::take(&mut self.shift) {
+                    if !self.jump_fraction_up() {
+                        self.history_step(1);
+                    }
+                } else if !self.jump_fraction_down() {
+                    self.history_step(-1);
+                }
+            }
+            if paint_sci_key(
+                ui,
+                KeyLabel::Text("S⇔D"),
+                "a b/c",
+                ctrl_size,
+                KeyTone::Sci,
+                matches!(self.display_mode, DisplayMode::Fraction | DisplayMode::MixedFraction),
+                self.shift,
+                scale,
+                palette,
+            ) {
+                if std::mem::take(&mut self.shift) {
+                    self.display_mode = if self.display_mode == DisplayMode::MixedFraction {
+                        DisplayMode::Fraction
+                    } else {
+                        DisplayMode::MixedFraction
+                    };
+                } else {
+                    self.display_mode = match self.display_mode {
+                        DisplayMode::Fraction | DisplayMode::MixedFraction => DisplayMode::Decimal,
+                        DisplayMode::Decimal | DisplayMode::Engineering => DisplayMode::Fraction,
+                    };
+                }
+            }
+            if paint_sci_key(
+                ui,
+                KeyLabel::Text("ENG"),
+                "",
+                ctrl_size,
+                KeyTone::Sci,
+                self.display_mode == DisplayMode::Engineering,
+                false,
+                scale,
+                palette,
+            ) {
+                self.display_mode = if self.display_mode == DisplayMode::Engineering {
+                    DisplayMode::Decimal
+                } else {
+                    DisplayMode::Engineering
+                };
+            }
+        });
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn show_sci_keypad(
+        &mut self,
+        ui: &mut Ui,
+        avail_w: f32,
+        sci_h: f32,
+        gap_x: f32,
+        gap_y: f32,
+        scale: f32,
+        precision: u32,
+        palette: &Palette,
+    ) {
+        let sci_size = Vec2::new((avail_w - gap_x * 5.0) / 6.0, sci_h);
+        let hyp = self.hyp;
+        let sci_rows: [[KeySpec; 6]; 3] = [
+            [
+                KeySpec {
+                    main_label: KeyLabel::FractionIcon,
+                    shift_label: "a b/c",
+                    main: KeyAction::Fraction { mixed: false },
+                    shift: KeyAction::Fraction { mixed: true },
+                    tone: KeyTone::Sci,
+                },
+                KeySpec::sci("x⁻¹", "x!", ins("^(-1)", false), ins("!", false)),
+                KeySpec::sci("√", "∛", ins("sqrt(", true), ins("cbrt(", true)),
+                KeySpec::sci("x²", "x³", ins("²", false), ins("³", false)),
+                KeySpec::sci("xʸ", "ʸ√x", ins("^", false), ins("^(1/", false)),
+                KeySpec::sci("log", "10ˣ", ins("log(", true), ins("10^(", true)),
+            ],
+            [
+                KeySpec::sci("ln", "eˣ", ins("ln(", true), ins("exp(", true)),
+                KeySpec::sci("(-)", "Abs", ins("-", true), ins("abs(", true)),
+                KeySpec::sci(
+                    if hyp { "sinh" } else { "sin" },
+                    if hyp { "sinh⁻¹" } else { "sin⁻¹" },
+                    if hyp { ins_hyp("sinh(", true) } else { ins("sin(", true) },
+                    if hyp { ins_hyp("asinh(", true) } else { ins("asin(", true) },
+                ),
+                KeySpec::sci(
+                    if hyp { "cosh" } else { "cos" },
+                    if hyp { "cosh⁻¹" } else { "cos⁻¹" },
+                    if hyp { ins_hyp("cosh(", true) } else { ins("cos(", true) },
+                    if hyp { ins_hyp("acosh(", true) } else { ins("acos(", true) },
+                ),
+                KeySpec::sci(
+                    if hyp { "tanh" } else { "tan" },
+                    if hyp { "tanh⁻¹" } else { "tan⁻¹" },
+                    if hyp { ins_hyp("tanh(", true) } else { ins("tan(", true) },
+                    if hyp { ins_hyp("atanh(", true) } else { ins("atan(", true) },
+                ),
+                KeySpec::sci("π", "e", ins("pi", true), ins("e", true)),
+            ],
+            [
+                KeySpec::sci("(", "%", ins("(", true), ins("%", false)),
+                KeySpec::sci(")", ",", ins(")", false), ins(", ", false)),
+                KeySpec::sci("MC", "STO", KeyAction::MemClear, KeyAction::MemStore),
+                KeySpec::sci("MR", "φ", ins("M", true), ins("phi", true)),
+                KeySpec::sci("M-", "τ", KeyAction::MemAdd(-1), ins("tau", true)),
+                KeySpec::sci("M+", "log₂", KeyAction::MemAdd(1), ins("log2(", true)),
+            ],
+        ];
+
+        for (s_idx, row) in sci_rows.into_iter().enumerate() {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = gap_x;
+                for spec in row {
+                    if paint_sci_key(
+                        ui,
+                        spec.main_label,
+                        spec.shift_label,
+                        sci_size,
+                        spec.tone,
+                        false,
+                        self.shift,
+                        scale,
+                        palette,
+                    ) {
+                        let act = if std::mem::take(&mut self.shift) { spec.shift } else { spec.main };
+                        self.execute_key_action(act, precision);
+                    }
+                }
+            });
+            if s_idx + 1 < 3 {
+                ui.add_space(gap_y);
+            }
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn show_num_keypad(
+        &mut self,
+        ui: &mut Ui,
+        avail_w: f32,
+        num_h: f32,
+        gap_x: f32,
+        gap_y: f32,
+        scale: f32,
+        precision: u32,
+        palette: &Palette,
+    ) {
+        let num_size = Vec2::new((avail_w - gap_x * 4.0) / 5.0, num_h);
+        const NUM_ROWS: [[KeySpec; 5]; 4] = [
+            [
+                KeySpec::num("7", "nPr", ins("7", true), ins("nPr(", true), KeyTone::Digit),
+                KeySpec::num("8", "nCr", ins("8", true), ins("nCr(", true), KeyTone::Digit),
+                KeySpec::num("9", "gcd", ins("9", true), ins("gcd(", true), KeyTone::Digit),
+                KeySpec::num("DEL", "", KeyAction::Backspace, KeyAction::Backspace, KeyTone::Danger),
+                KeySpec::num("AC", "", KeyAction::ClearAll, KeyAction::ClearAll, KeyTone::Danger),
+            ],
+            [
+                KeySpec::num("4", "lcm", ins("4", true), ins("lcm(", true), KeyTone::Digit),
+                KeySpec::num("5", "hypot", ins("5", true), ins("hypot(", true), KeyTone::Digit),
+                KeySpec::num("6", "round", ins("6", true), ins("round(", true), KeyTone::Digit),
+                KeySpec::num("×", "xʸ", ins(" * ", false), ins("^", false), KeyTone::Op),
+                KeySpec::num("÷", "mod", ins(" / ", false), ins(" mod ", false), KeyTone::Op),
+            ],
+            [
+                KeySpec::num("1", "floor", ins("1", true), ins("floor(", true), KeyTone::Digit),
+                KeySpec::num("2", "ceil", ins("2", true), ins("ceil(", true), KeyTone::Digit),
+                KeySpec::num("3", "abs", ins("3", true), ins("abs(", true), KeyTone::Digit),
+                KeySpec::num("+", "min", ins(" + ", false), ins("min(", true), KeyTone::Op),
+                KeySpec::num("−", "max", ins(" - ", false), ins("max(", true), KeyTone::Op),
+            ],
+            [
+                KeySpec::num("0", "Rnd", ins("0", true), ins("round(", true), KeyTone::Digit),
+                KeySpec::num(".", "Ran#", ins(".", false), KeyAction::Random, KeyTone::Digit),
+                KeySpec::num("×10ˣ", "π", ins(" * 10^", false), ins("pi", true), KeyTone::Digit),
+                KeySpec::num("Ans", "%", ins("ans", true), ins("%", false), KeyTone::Op),
+                KeySpec::num("=", "", KeyAction::Evaluate, KeyAction::Evaluate, KeyTone::Accent),
+            ],
+        ];
+
+        for (r_idx, row) in NUM_ROWS.into_iter().enumerate() {
+            ui.horizontal(|ui| {
+                ui.spacing_mut().item_spacing.x = gap_x;
+                for spec in row {
+                    if paint_sci_key(
+                        ui,
+                        spec.main_label,
+                        spec.shift_label,
+                        num_size,
+                        spec.tone,
+                        false,
+                        self.shift,
+                        scale,
+                        palette,
+                    ) {
+                        let act = if std::mem::take(&mut self.shift) { spec.shift } else { spec.main };
+                        self.execute_key_action(act, precision);
+                    }
+                }
+            });
+            if r_idx + 1 < 4 {
+                ui.add_space(gap_y);
+            }
+        }
     }
 
     fn show_history_panel(
@@ -1642,6 +1655,42 @@ fn char_to_byte_idx(s: &str, char_idx: usize) -> usize {
     s.char_indices().nth(char_idx).map_or(s.len(), |(b, _)| b)
 }
 
+/// Finds the byte index of the `(` matching the `)` at `close_byte`.
+fn find_matching_open_paren(s: &str, close_byte: usize) -> Option<usize> {
+    let mut depth = 0i32;
+    for (b, c) in s[..=close_byte].char_indices().rev() {
+        match c {
+            ')' => depth += 1,
+            '(' => {
+                depth -= 1;
+                if depth == 0 {
+                    return Some(b);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
+}
+
+fn paint_blinking_caret(
+    ctx: &Context,
+    painter: &Painter,
+    x: f32,
+    top_y: f32,
+    bot_y: f32,
+    palette: &Palette,
+) {
+    let t = ctx.input(|i| i.time);
+    let blink = ((t * 5.2).sin() * 0.5 + 0.5) as f32;
+    let alpha = (70.0 + blink * 185.0) as u8;
+    painter.line_segment(
+        [Pos2::new(x, top_y), Pos2::new(x, bot_y)],
+        Stroke::new(2.0, Palette::alpha(palette.accent, alpha)),
+    );
+    ctx.request_repaint_after(std::time::Duration::from_millis(60));
+}
+
 fn paint_status_tag(
     ui: &mut Ui,
     label: &str,
@@ -1671,7 +1720,7 @@ fn paint_status_tag(
 #[allow(clippy::too_many_arguments)]
 fn paint_sci_key(
     ui: &mut Ui,
-    main_label: &str,
+    main_label: KeyLabel,
     shift_label: &str,
     size: Vec2,
     tone: KeyTone,
@@ -1751,13 +1800,23 @@ fn paint_sci_key(
             KeyTone::Danger => 14.5,
             _ => 12.5,
         };
-        ui.painter().text(
-            draw_rect.center(),
-            Align2::CENTER_CENTER,
-            main_label,
-            FontId::proportional((base_fs * scale).clamp(11.0, 26.0)),
-            base_fg,
-        );
+        match main_label {
+            KeyLabel::FractionIcon => math_display::paint_fraction_key_icon(
+                ui.painter(),
+                draw_rect.center(),
+                scale * 0.85,
+                base_fg,
+            ),
+            KeyLabel::Text(txt) => {
+                ui.painter().text(
+                    draw_rect.center(),
+                    Align2::CENTER_CENTER,
+                    txt,
+                    FontId::proportional((base_fs * scale).clamp(11.0, 26.0)),
+                    base_fg,
+                );
+            }
+        }
     } else {
         let shift_col = if shift_active {
             palette.warning
@@ -1781,26 +1840,27 @@ fn paint_sci_key(
         };
         let bot_y = draw_rect.top() + draw_rect.height() * 0.68;
 
-        if main_label == "__FRAC_ICON__" {
-            math_display::paint_fraction_key_icon(
+        match main_label {
+            KeyLabel::FractionIcon => math_display::paint_fraction_key_icon(
                 ui.painter(),
                 Pos2::new(draw_rect.center().x, bot_y),
                 scale * 0.85,
                 main_col,
-            );
-        } else {
-            let main_base = match tone {
-                KeyTone::Digit => 16.5,
-                KeyTone::Op => 17.5,
-                _ => 13.5,
-            };
-            ui.painter().text(
-                Pos2::new(draw_rect.center().x, bot_y),
-                Align2::CENTER_CENTER,
-                main_label,
-                FontId::proportional((main_base * scale).clamp(11.5, 25.0)),
-                main_col,
-            );
+            ),
+            KeyLabel::Text(txt) => {
+                let main_base = match tone {
+                    KeyTone::Digit => 16.5,
+                    KeyTone::Op => 17.5,
+                    _ => 13.5,
+                };
+                ui.painter().text(
+                    Pos2::new(draw_rect.center().x, bot_y),
+                    Align2::CENTER_CENTER,
+                    txt,
+                    FontId::proportional((main_base * scale).clamp(11.5, 25.0)),
+                    main_col,
+                );
+            }
         }
     }
 
@@ -1874,5 +1934,22 @@ mod tests {
         assert_eq!(v.expr, "((2)/(5))/(4)");
         let val = v.last_eval.as_ref().expect("eval").as_ref().expect("ok");
         assert_eq!(decimal_to_fraction(val.si, 10_000), Some((1, 10)));
+    }
+
+    #[test]
+    fn shift_actions_respect_replace_on_commit() {
+        let mut v = ScientificView::default();
+        v.insert_token("20", true);
+        v.evaluate_commit(8);
+        assert!(v.committed);
+
+        // Postfix `%` after commit should append to existing expression, not erase it.
+        v.execute_key_action(ins("%", false), 8);
+        assert_eq!(v.expr, "20%");
+
+        v.evaluate_commit(8);
+        // Shifted prefix function `asin(` after commit should start a fresh expression.
+        v.execute_key_action(ins("asin(", true), 8);
+        assert_eq!(v.expr, "asin(");
     }
 }
