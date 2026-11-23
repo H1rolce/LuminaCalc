@@ -1,0 +1,11 @@
+[package]
+name = "lumina-core"
+description = "LuminaCalc math engine: lexer, parser, exact decimal evaluator, units, plotting helpers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+rust_decimal = { version = "1.43.0", default-features = false, features = ["std", "maths"] }
+thiserror = "2.0.21"
+winnow = { version = "1.0.5", default-features = false, features = ["std", "parser", "ascii"] }
