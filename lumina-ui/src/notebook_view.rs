@@ -1,18 +1,18 @@
 //! Two-column reactive math notebook (Soulver / Numi style).
 //!
-//! - Zero-allocation render loop when idle: caches both the syntax-highlighted
-//!   `Arc<Galley>` and formatted result strings using a dirty-flag key.
+//! - Low-overhead render loop when idle: caches both the syntax-highlighted
+//!   `LayoutJob` and formatted result strings using a dirty-flag key.
 //! - Pixel-aligned gutter line numbers (left) and clickable results (right)
 //!   derived directly from `output.galley.rows`, staying aligned even with wrapping.
 //! - One-click result copy with toast feedback, right-click actions, and inline
 //!   error underlining + hover tooltips without intrusive popups.
 
-use crate::i18n::{Lang, format_error, tr};
+use crate::i18n::{Lang, Strings, format_error, tr};
 use crate::style::{self, Palette, ThemeId};
 use egui::text::LayoutJob;
 use egui::{
-    Align2, CornerRadius, CursorIcon, FontId, Frame, Galley, Id, Margin, Pos2, Rect, ScrollArea,
-    Sense, Shape, Stroke, TextEdit, Ui, Vec2,
+    Align2, Color32, CornerRadius, CursorIcon, FontId, Frame, Galley, Id, Margin, Pos2, Rect,
+    ScrollArea, Sense, Shape, Stroke, TextEdit, Ui, Vec2,
 };
 use lumina_core::{FormatOptions, LineOutput, Notebook};
 use std::sync::Arc;
@@ -21,6 +21,7 @@ use std::sync::Arc;
 struct LayoutKey {
     doc_version: u64,
     theme: ThemeId,
+    accent: Color32,
     font_size_bits: u32,
     wrap_width_bits: u32,
 }
@@ -200,6 +201,7 @@ impl NotebookView {
                     let key = LayoutKey {
                         doc_version: notebook.version(),
                         theme,
+                        accent: palette.accent,
                         font_size_bits: font_size.to_bits(),
                         wrap_width_bits: wrap_width.to_bits(),
                     };
@@ -409,22 +411,19 @@ impl NotebookView {
                                 };
                             }
 
-                            let line_src = line.source.clone();
-                            let plain_owned = plain.to_owned();
-                            let plain_num_owned = plain_num.to_owned();
-                            let formatted_owned = formatted.to_owned();
+                            let line_src = line.source.as_str();
                             resp.context_menu(|ui| {
                                 if ui.button(s.nb_copy_full).clicked() {
                                     action = NotebookAction::Copy {
-                                        text: plain_owned.clone(),
-                                        label: formatted_owned.clone(),
+                                        text: plain.to_owned(),
+                                        label: formatted.to_owned(),
                                     };
                                     ui.close();
                                 }
                                 if ui.button(s.nb_copy_val).clicked() {
                                     action = NotebookAction::Copy {
-                                        text: plain_num_owned.clone(),
-                                        label: plain_num_owned.clone(),
+                                        text: plain_num.to_owned(),
+                                        label: plain_num.to_owned(),
                                     };
                                     ui.close();
                                 }
@@ -433,7 +432,7 @@ impl NotebookView {
                                     ui.close();
                                 }
                                 if ui.button(s.nb_send_to_plot).clicked() {
-                                    action = NotebookAction::SendToPlot(line_src.clone());
+                                    action = NotebookAction::SendToPlot(line_src.to_owned());
                                     ui.close();
                                 }
                             });
@@ -474,6 +473,21 @@ impl NotebookView {
             });
 
         // ── Bottom status / variables bar ──
+        if self.show_bottom_bar(ui, s, precision, palette) {
+            text_changed = true;
+        }
+
+        (action, text_changed)
+    }
+
+    fn show_bottom_bar(
+        &mut self,
+        ui: &mut Ui,
+        s: &Strings,
+        precision: &mut u32,
+        palette: &Palette,
+    ) -> bool {
+        let mut text_changed = false;
         style::hairline_h(ui, palette.border_subtle);
         Frame::new()
             .fill(palette.bg_mantle)
@@ -550,7 +564,6 @@ impl NotebookView {
                     });
                 });
             });
-
-        (action, text_changed)
+        text_changed
     }
 }
