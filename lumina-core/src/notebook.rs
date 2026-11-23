@@ -6,7 +6,7 @@
 use crate::error::{CalcError, CalcResult, ErrorKind};
 use crate::eval::{self, Env, Special};
 use crate::highlight::{self, HighlightSpan};
-use crate::lexer::{Tok, lex};
+use crate::lexer::{is_hash_comment, lex};
 use crate::parser::{ExprKind, Stmt, parse_stmt};
 use crate::value::Value;
 use std::collections::HashSet;
@@ -130,8 +130,7 @@ impl Notebook {
             let raw_len = raw_segment.len();
             let clean = raw_segment.strip_suffix('\r').unwrap_or(raw_segment);
             let trimmed = clean.trim_start();
-            let is_heading = trimmed.starts_with('#')
-                && !trimmed[1..].starts_with(|c: char| c.is_ascii_digit());
+            let is_heading = is_hash_comment(trimmed);
 
             let tokens = lex(clean);
             let highlights = highlight::classify(&tokens, &defined_vars, false);
@@ -201,9 +200,6 @@ impl Notebook {
                     }
                 }
             };
-
-            // Mark tokens as heading comment if appropriate (lexer already marks `# heading` as Comment).
-            let _ = Tok::Comment;
 
             new_lines.push(LineEntry {
                 source: clean.to_owned(),
