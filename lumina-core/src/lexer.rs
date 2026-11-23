@@ -178,6 +178,12 @@ fn token<'s>(i: &mut &'s str) -> WResult<Tok<'s>> {
     alt((number, ident, line_ref, operator)).parse_next(i)
 }
 
+/// Returns `true` if `s` begins with a `#` comment/heading (and not a `#123` line reference).
+#[inline]
+pub fn is_hash_comment(s: &str) -> bool {
+    s.starts_with('#') && !s[1..].starts_with(|c: char| c.is_ascii_digit())
+}
+
 /// Tokenizes one line. Whitespace is skipped; `//` and `# text` start a comment
 /// that spans to the end of the line.
 pub fn lex(src: &str) -> Vec<Token<'_>> {
@@ -189,8 +195,7 @@ pub fn lex(src: &str) -> Vec<Token<'_>> {
             break;
         }
         let start = src.len() - rest.len();
-        let is_comment = rest.starts_with("//")
-            || (rest.starts_with('#') && !rest[1..].starts_with(|c: char| c.is_ascii_digit()));
+        let is_comment = rest.starts_with("//") || is_hash_comment(rest);
         if is_comment {
             out.push(Token { tok: Tok::Comment, span: (start, src.len()) });
             break;
