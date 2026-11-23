@@ -58,8 +58,13 @@ impl ToastManager {
             return;
         }
 
-        // Smooth animation curve (requests high-FPS repaint only while visible).
-        ctx.request_repaint();
+        // Request high-FPS repaints only during fade-in/fade-out; sleep during steady hold.
+        if elapsed < fade_in || elapsed > total - fade_out {
+            ctx.request_repaint();
+        } else {
+            let until_fade_out = (total - fade_out - elapsed).max(0.01);
+            ctx.request_repaint_after(std::time::Duration::from_secs_f32(until_fade_out));
+        }
 
         let alpha = if elapsed < fade_in {
             let t = (elapsed / fade_in).clamp(0.0, 1.0);
