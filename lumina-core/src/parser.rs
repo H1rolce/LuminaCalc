@@ -157,21 +157,13 @@ impl<'a> Parser<'_, 'a> {
         if self.peek() == Some(Tok::Keyword(Kw::In)) {
             self.bump();
             let target_start = self.span_here().start;
-            if let Some(Tok::Ident(name)) = self.peek() {
-                let notation = match name {
-                    "hex" | "шестн" => Some(Notation::Radix(Radix::Hex)),
-                    "bin" | "binary" | "двоич" => Some(Notation::Radix(Radix::Bin)),
-                    "oct" | "octal" | "восьм" => Some(Notation::Radix(Radix::Oct)),
-                    "dec" | "decimal" | "десят" => Some(Notation::Radix(Radix::Dec)),
-                    "sci" | "scientific" | "экспон" => Some(Notation::Sci),
-                    _ => None,
-                };
-                if let Some(n) = notation {
-                    let end = self.toks[self.pos].span.1;
-                    self.bump();
-                    let span = lhs.span.start..end;
-                    return Ok(mk(ExprKind::Convert(Box::new(lhs), Target::Notation(n)), span));
-                }
+            if let Some(Tok::Ident(name)) = self.peek()
+                && let Some(n) = Notation::parse_keyword(name)
+            {
+                let end = self.toks[self.pos].span.1;
+                self.bump();
+                let span = lhs.span.start..end;
+                return Ok(mk(ExprKind::Convert(Box::new(lhs), Target::Notation(n)), span));
             }
             if self.peek().is_none() {
                 return Err(CalcError::new(ErrorKind::UnexpectedEnd, target_start..target_start));
