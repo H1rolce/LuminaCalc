@@ -23,6 +23,16 @@ impl BitWidth {
     ];
 
     #[inline]
+    pub const fn from_bits(bits: u8) -> Self {
+        match bits {
+            8 => BitWidth::Bits8,
+            16 => BitWidth::Bits16,
+            32 => BitWidth::Bits32,
+            _ => BitWidth::Bits64,
+        }
+    }
+
+    #[inline]
     pub const fn bits(self) -> u32 {
         self as u32
     }
