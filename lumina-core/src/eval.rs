@@ -55,6 +55,24 @@ impl AngleUnit {
             AngleUnit::Grad => "GRAD",
         }
     }
+
+    #[inline]
+    pub const fn from_code(code: u8) -> Self {
+        match code {
+            1 => AngleUnit::Rad,
+            2 => AngleUnit::Grad,
+            _ => AngleUnit::Deg,
+        }
+    }
+
+    #[inline]
+    pub const fn to_code(self) -> u8 {
+        match self {
+            AngleUnit::Deg => 0,
+            AngleUnit::Rad => 1,
+            AngleUnit::Grad => 2,
+        }
+    }
 }
 
 /// Variables and notebook context visible to an expression.
@@ -591,7 +609,10 @@ fn call(name: &str, name_span: &Span, args: &[Expr], span: &Span, env: &Env) -> 
             if vals[0].dim != vals[1].dim {
                 return Err(mismatch(&vals[0], &vals[1], span));
             }
-            let sq = vals[0].si.checked_mul(vals[0].si).and_then(|a| Some(a + vals[1].si.checked_mul(vals[1].si)?));
+            let sq = vals[0]
+                .si
+                .checked_mul(vals[0].si)
+                .and_then(|a| vals[1].si.checked_mul(vals[1].si).and_then(|b| a.checked_add(b)));
             let si = sq.and_then(|s| s.sqrt()).ok_or_else(|| CalcError::new(ErrorKind::Overflow, span.clone()))?;
             Ok(Value { si, dim: vals[0].dim, unit: vals[0].unit.clone(), notation: Notation::Auto, bare_unit: false })
         }
@@ -599,10 +620,18 @@ fn call(name: &str, name_span: &Span, args: &[Expr], span: &Span, env: &Env) -> 
             if vals.len() != 2 {
                 return Err(arity(name, "2", vals.len(), name_span));
             }
-            let (a, b) = (to_int(&vals[0], &arg_span(0))?.abs(), to_int(&vals[1], &arg_span(1))?.abs());
+            let a = to_int(&vals[0], &arg_span(0))?.unsigned_abs();
+            let b = to_int(&vals[1], &arg_span(1))?.unsigned_abs();
             let g = gcd(a, b);
-            let r = if canon == "gcd" { g } else if g == 0 { 0 } else { a / g * b };
-            Ok(Value::num(from_int(r, span)?))
+            let r = if canon == "gcd" {
+                g
+            } else if let Some(q) = a.checked_div(g) {
+                q.checked_mul(b).ok_or_else(|| CalcError::new(ErrorKind::Overflow, span.clone()))?
+            } else {
+                0
+            };
+            let d = Decimal::from_u128(r).ok_or_else(|| CalcError::new(ErrorKind::Overflow, span.clone()))?;
+            Ok(Value::num(d))
         }
         "npr" | "ncr" => {
             if vals.len() != 2 {
@@ -699,7 +728,7 @@ fn call(name: &str, name_span: &Span, args: &[Expr], span: &Span, env: &Env) -> 
     }
 }
 
-fn gcd(mut a: i128, mut b: i128) -> i128 {
+fn gcd(mut a: u128, mut b: u128) -> u128 {
     while b != 0 {
         (a, b) = (b, a % b);
     }
@@ -883,5 +912,11 @@ mod tests {
         assert_eq!(show("nCr(10, 3)"), "120");
         assert_eq!(show("nCr(5, 0)"), "1");
         assert_eq!(kind("nCr(3, 5)"), ErrorKind::Domain);
+    }
+
+    #[test]
+    fn hypot_and_lcm_overflow_return_error_instead_of_panicking() {
+        assert_eq!(kind("hypot(2.5e14, 2.5e14)"), ErrorKind::Overflow);
+        assert_eq!(kind("lcm(10000000000000000000, 10000000000000000001)"), ErrorKind::Overflow);
     }
 }
