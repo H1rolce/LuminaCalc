@@ -95,6 +95,20 @@ pub enum Notation {
     Radix(Radix),
 }
 
+impl Notation {
+    /// Parses a conversion notation keyword (EN + RU aliases).
+    pub fn parse_keyword(name: &str) -> Option<Self> {
+        match name {
+            "hex" | "шестн" => Some(Notation::Radix(Radix::Hex)),
+            "bin" | "binary" | "двоич" => Some(Notation::Radix(Radix::Bin)),
+            "oct" | "octal" | "восьм" => Some(Notation::Radix(Radix::Oct)),
+            "dec" | "decimal" | "десят" => Some(Notation::Radix(Radix::Dec)),
+            "sci" | "scientific" | "экспон" => Some(Notation::Sci),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub struct Value {
     /// Magnitude in SI base units.
