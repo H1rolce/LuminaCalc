@@ -1,7 +1,7 @@
 //! Cohesive design system for LuminaCalc.
 //!
-//! Replaces default egui visuals with three tailored themes (Catppuccin Mocha,
-//! Layan Dark, Catppuccin Latte), semantic syntax-highlighting palettes,
+//! Replaces default egui visuals with Dark and Light themes driven by the
+//! Windows system accent color, semantic syntax-highlighting palettes,
 //! crisp system fonts with Cyrillic + math glyph coverage, and smooth UI helpers.
 
 use crate::i18n::Lang;
@@ -530,7 +530,7 @@ pub fn build_notebook_layout_job(
     job
 }
 
-/// Builds a single-line highlighted `LayoutJob` (used by Plotter and Programmer inputs).
+/// Builds a single-line highlighted `LayoutJob` (used by Plotter, Scientific, and Programmer inputs).
 pub fn build_singleline_highlight(
     text: &str,
     plot_mode: bool,
@@ -547,6 +547,26 @@ pub fn build_singleline_highlight(
     let spans = lumina_core::highlight::classify(&tokens, &empty, plot_mode);
     append_highlighted_line(&mut job, text, &spans, err_span, false, &font_id, palette);
     job
+}
+
+/// Returns a reusable single-line syntax-highlighting layouter closure for `TextEdit::layouter`.
+pub fn singleline_layouter<'a>(
+    plot_mode: bool,
+    err_span: Option<&'a Span>,
+    font_size: f32,
+    palette: &'a Palette,
+) -> impl FnMut(&egui::Ui, &dyn egui::TextBuffer, f32) -> Arc<egui::Galley> + 'a {
+    move |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
+        let job = build_singleline_highlight(
+            buf.as_str(),
+            plot_mode,
+            err_span,
+            font_size,
+            wrap_width,
+            palette,
+        );
+        ui.painter().layout_job(job)
+    }
 }
 
 /// Paints a smooth pill badge (returns the painted rect).
