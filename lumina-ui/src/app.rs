@@ -10,10 +10,10 @@ use crate::state::{ActiveTab, AppState};
 use crate::style::{self, Palette, ThemeId};
 use crate::titlebar;
 use crate::toast::ToastManager;
-use egui::{Context, Frame, Key, Modifiers, ViewportCommand, WindowLevel};
+use egui::{Context, Frame, Key, ViewportCommand, WindowLevel};
 use global_hotkey::hotkey::{Code, HotKey, Modifiers as GhMod};
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState};
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 pub struct LuminaApp {
     theme: ThemeId,
@@ -34,7 +34,6 @@ pub struct LuminaApp {
     _hotkey_mgr: Option<GlobalHotKeyManager>,
 
     dirty_since: Option<Instant>,
-    theme_applied: bool,
     last_sys_theme: crate::win_theme::SystemTheme,
     last_sys_check: Instant,
 }
@@ -80,7 +79,6 @@ impl LuminaApp {
             clipboard: arboard::Clipboard::new().ok(),
             _hotkey_mgr: hotkey_mgr,
             dirty_since: None,
-            theme_applied: true,
             last_sys_theme,
             last_sys_check: Instant::now(),
         }
@@ -125,12 +123,16 @@ impl LuminaApp {
         }
     }
 
-    fn flush_save_if_due(&mut self) {
-        if let Some(since) = self.dirty_since
-            && since.elapsed().as_secs_f32() >= 0.8
-        {
-            self.build_snapshot().save();
-            self.dirty_since = None;
+    fn flush_save_if_due(&mut self, ctx: &Context) {
+        const SAVE_DELAY: Duration = Duration::from_millis(800);
+        if let Some(since) = self.dirty_since {
+            let elapsed = since.elapsed();
+            if elapsed >= SAVE_DELAY {
+                self.build_snapshot().save();
+                self.dirty_since = None;
+            } else {
+                ctx.request_repaint_after(SAVE_DELAY - elapsed);
+            }
         }
     }
 
@@ -223,10 +225,7 @@ impl eframe::App for LuminaApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
 
-        if !self.theme_applied {
-            self.palette = style::apply_theme(&ctx, self.theme);
-            self.theme_applied = true;
-        } else if self.last_sys_check.elapsed().as_secs_f32() >= 2.0 {
+        if self.last_sys_check.elapsed().as_secs_f32() >= 2.0 {
             self.last_sys_check = Instant::now();
             let cur = crate::win_theme::read_system_theme();
             if cur.accent != self.last_sys_theme.accent {
@@ -272,9 +271,6 @@ impl eframe::App for LuminaApp {
         egui::CentralPanel::default()
             .frame(Frame::NONE.fill(self.palette.bg_base))
             .show(ui, |ui| {
-                // Keep unused Modifiers import silence-free if needed
-                let _ = Modifiers::NONE;
-
                 match self.tab {
                     ActiveTab::Notebook => {
                         let prev_prec = self.precision;
@@ -321,7 +317,7 @@ impl eframe::App for LuminaApp {
                     }
                     ActiveTab::Plotter => {
                         let (act, changed) =
-                            self.plotter.show(ui, self.theme, self.lang, &self.palette);
+                            self.plotter.show(ui, self.lang, &self.palette);
                         if changed {
                             self.mark_dirty();
                         }
@@ -357,7 +353,7 @@ impl eframe::App for LuminaApp {
         self.toasts.paint(&ctx, &self.palette);
 
         // Debounced TOML persistence
-        self.flush_save_if_due();
+        self.flush_save_if_due(&ctx);
     }
 }
 
