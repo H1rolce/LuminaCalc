@@ -104,93 +104,27 @@ pub fn show_titlebar(
         Stroke::new(1.0, palette.border_subtle),
     );
 
-    // ── Left: vector Lumina spark logo + app title ──
+    // ── Left: vector Lumina spark logo + app title (compact icon-only on narrow windows) ──
+    let show_brand_text = bar_rect.width() >= 780.0;
+    let brand_w = if show_brand_text { 118.0 } else { 30.0 };
     let brand_rect = Rect::from_min_size(
         Pos2::new(bar_rect.left() + 10.0, bar_rect.top() + 6.0),
-        Vec2::new(118.0, bar_h - 12.0),
+        Vec2::new(brand_w, bar_h - 12.0),
     );
     ui.interact(brand_rect, Id::unique("tb_brand"), Sense::hover())
         .on_hover_text(s.hotkey_hint);
     let logo_center = Pos2::new(bar_rect.left() + 24.0, bar_rect.center().y);
     paint_lumina_logo(ui.painter(), logo_center, 8.5, palette);
-    ui.painter().text(
-        Pos2::new(bar_rect.left() + 40.0, bar_rect.center().y),
-        egui::Align2::LEFT_CENTER,
-        "LuminaCalc",
-        FontId::proportional(14.0),
-        palette.text_primary,
-    );
-
-    // ── Center: segmented tab control with smooth sliding indicator ──
-    let tabs = [
-        (ActiveTab::Notebook, s.tab_notebook),
-        (ActiveTab::Scientific, s.tab_scientific),
-        (ActiveTab::Plotter, s.tab_plot),
-        (ActiveTab::Programmer, s.tab_programmer),
-    ];
-    let tab_w = 96.0f32;
-    let tab_h = 28.0f32;
-    let pad = 3.0f32;
-    let group_w = tab_w * tabs.len() as f32 + pad * 2.0;
-    let group_rect = Rect::from_center_size(bar_rect.center(), Vec2::new(group_w, tab_h + pad * 2.0));
-
-    // Only draw centered tabs if window is wide enough, else shift right of brand
-    let group_rect = if group_rect.left() < bar_rect.left() + 132.0 {
-        Rect::from_min_size(
-            Pos2::new(bar_rect.left() + 132.0, bar_rect.center().y - (tab_h + pad * 2.0) * 0.5),
-            Vec2::new(group_w, tab_h + pad * 2.0),
-        )
-    } else {
-        group_rect
-    };
-
-    ui.painter().rect(
-        group_rect,
-        CornerRadius::same(9),
-        palette.bg_crust,
-        Stroke::new(1.0, palette.border_subtle),
-        egui::StrokeKind::Inside,
-    );
-
-    let active_idx = tabs.iter().position(|(t, _)| *t == tab).unwrap_or(0) as f32;
-    let anim_idx = ui.ctx().animate_value_with_time(Id::unique("lumina_tab_slide"), active_idx, 0.16);
-
-    let indicator_rect = Rect::from_min_size(
-        Pos2::new(group_rect.left() + pad + anim_idx * tab_w, group_rect.top() + pad),
-        Vec2::new(tab_w, tab_h),
-    );
-    ui.painter().rect(
-        indicator_rect,
-        CornerRadius::same(7),
-        palette.bg_elevated,
-        Stroke::new(1.0, Palette::alpha(palette.accent, 110)),
-        egui::StrokeKind::Inside,
-    );
-
-    for (i, (t, label)) in tabs.iter().enumerate() {
-        let r = Rect::from_min_size(
-            Pos2::new(group_rect.left() + pad + i as f32 * tab_w, group_rect.top() + pad),
-            Vec2::new(tab_w, tab_h),
-        );
-        let resp = ui.interact(r, Id::unique(("lumina_tab", i)), Sense::click());
-        let is_active = *t == tab;
-        let hover_t = ui.ctx().animate_bool_with_time(resp.id, resp.hovered(), 0.10);
-        let text_col = if is_active {
-            palette.text_primary
-        } else {
-            Palette::lerp(palette.text_secondary, palette.text_primary, hover_t)
-        };
+    if show_brand_text {
         ui.painter().text(
-            r.center(),
-            egui::Align2::CENTER_CENTER,
-            *label,
-            FontId::proportional(13.0),
-            text_col,
+            Pos2::new(bar_rect.left() + 40.0, bar_rect.center().y),
+            egui::Align2::LEFT_CENTER,
+            "LuminaCalc",
+            FontId::proportional(14.0),
+            palette.text_primary,
         );
-        if resp.clicked() && !is_active {
-            action.tab_changed = Some(*t);
-        }
     }
+    let left_limit = brand_rect.right() + 6.0;
 
     // ── Right: Theme, Language, Pin, Window Controls ──
     let mut right_x = bar_rect.right() - 8.0;
@@ -310,6 +244,76 @@ pub fn show_titlebar(
     );
     if theme_resp.clicked() {
         action.theme_cycled = true;
+    }
+    let right_limit = theme_rect.left() - 8.0;
+
+    // ── Center: segmented tab control (clamped cleanly between brand and right controls) ──
+    let tabs = [
+        (ActiveTab::Notebook, s.tab_notebook),
+        (ActiveTab::Scientific, s.tab_scientific),
+        (ActiveTab::Plotter, s.tab_plot),
+        (ActiveTab::Programmer, s.tab_programmer),
+    ];
+    let tab_h = 28.0f32;
+    let pad = 3.0f32;
+    let avail_tabs_w = (right_limit - left_limit).max(160.0);
+    let tab_w = ((avail_tabs_w - pad * 2.0) / tabs.len() as f32).clamp(56.0, 96.0);
+    let tab_fs = if tab_w < 84.0 { 11.5 } else { 13.0 };
+    let group_w = tab_w * tabs.len() as f32 + pad * 2.0;
+    let group_h = tab_h + pad * 2.0;
+    let ideal_left = bar_rect.center().x - group_w * 0.5;
+    let clamped_left = ideal_left.clamp(left_limit, (right_limit - group_w).max(left_limit));
+    let group_rect = Rect::from_min_size(
+        Pos2::new(clamped_left, bar_rect.center().y - group_h * 0.5),
+        Vec2::new(group_w, group_h),
+    );
+
+    ui.painter().rect(
+        group_rect,
+        CornerRadius::same(9),
+        palette.bg_crust,
+        Stroke::new(1.0, palette.border_subtle),
+        egui::StrokeKind::Inside,
+    );
+
+    let active_idx = tabs.iter().position(|(t, _)| *t == tab).unwrap_or(0) as f32;
+    let anim_idx = ui.ctx().animate_value_with_time(Id::unique("lumina_tab_slide"), active_idx, 0.16);
+
+    let indicator_rect = Rect::from_min_size(
+        Pos2::new(group_rect.left() + pad + anim_idx * tab_w, group_rect.top() + pad),
+        Vec2::new(tab_w, tab_h),
+    );
+    ui.painter().rect(
+        indicator_rect,
+        CornerRadius::same(7),
+        palette.bg_elevated,
+        Stroke::new(1.0, Palette::alpha(palette.accent, 110)),
+        egui::StrokeKind::Inside,
+    );
+
+    for (i, (t, label)) in tabs.iter().enumerate() {
+        let r = Rect::from_min_size(
+            Pos2::new(group_rect.left() + pad + i as f32 * tab_w, group_rect.top() + pad),
+            Vec2::new(tab_w, tab_h),
+        );
+        let resp = ui.interact(r, Id::unique(("lumina_tab", i)), Sense::click());
+        let is_active = *t == tab;
+        let hover_t = ui.ctx().animate_bool_with_time(resp.id, resp.hovered(), 0.10);
+        let text_col = if is_active {
+            palette.text_primary
+        } else {
+            Palette::lerp(palette.text_secondary, palette.text_primary, hover_t)
+        };
+        ui.painter().text(
+            r.center(),
+            egui::Align2::CENTER_CENTER,
+            *label,
+            FontId::proportional(tab_fs),
+            text_col,
+        );
+        if resp.clicked() && !is_active {
+            action.tab_changed = Some(*t);
+        }
     }
 
     // Drag or double-click empty titlebar space to move / maximize window.
