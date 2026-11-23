@@ -6,11 +6,8 @@ use crate::error::{CalcError, CalcResult, ErrorKind};
 use crate::eval;
 use crate::lexer::{Tok, lex};
 use crate::parser::{BinOp, Expr, ExprKind, PostOp, Target, UnOp, parse_expr};
+use crate::units;
 use rust_decimal::prelude::ToPrimitive;
-use std::f64::consts::{E, PI, TAU};
-
-#[allow(clippy::approx_constant)]
-const PHI: f64 = 1.618_033_988_749_895;
 
 #[derive(Debug, Clone)]
 pub struct CompiledPlot {
@@ -38,7 +35,7 @@ pub struct SnapPoint {
 }
 
 fn is_angle_unit(name: &str) -> bool {
-    matches!(name, "deg" | "degree" | "degrees" | "°" | "град" | "rad" | "рад")
+    units::lookup(name).is_some_and(|u| u.dim.is_none())
 }
 
 /// Parses a plot equation such as `y = a * sin(b * x)`, `f(x) = x^2 - 1`, or `sin(x)`.
@@ -126,15 +123,12 @@ fn lookup_param(name: &str, params: &[(Box<str>, f64)]) -> Option<f64> {
 
 #[inline]
 fn const_f64(name: &str) -> Option<f64> {
-    match name {
-        "pi" | "π" | "пи" => Some(PI),
-        "e" => Some(E),
-        "tau" | "τ" => Some(TAU),
-        "phi" | "φ" => Some(PHI),
-        "deg" | "degree" | "degrees" | "°" | "град" => Some(PI / 180.0),
-        "rad" | "рад" => Some(1.0),
-        _ => None,
+    if let Some(c) = eval::constant(name) {
+        return c.to_f64();
     }
+    units::lookup(name)
+        .filter(|u| u.dim.is_none())
+        .and_then(|u| u.factor.to_f64())
 }
 
 /// Fast zero-allocation `f64` evaluation of a compiled plot expression.
@@ -236,7 +230,9 @@ pub fn eval_f64(expr: &Expr, indep: &str, x: f64, params: &[(Box<str>, f64)]) ->
                 "trunc" => a0().trunc(),
                 "sign" => {
                     let v = a0();
-                    if v > 0.0 {
+                    if v.is_nan() {
+                        f64::NAN
+                    } else if v > 0.0 {
                         1.0
                     } else if v < 0.0 {
                         -1.0
@@ -255,6 +251,9 @@ pub fn eval_f64(expr: &Expr, indep: &str, x: f64, params: &[(Box<str>, f64)]) ->
                 "sinh" => a0().sinh(),
                 "cosh" => a0().cosh(),
                 "tanh" => a0().tanh(),
+                "asinh" => a0().asinh(),
+                "acosh" => a0().acosh(),
+                "atanh" => a0().atanh(),
                 "ln" => a0().ln(),
                 "log2" => a0().log2(),
                 "log10" => a0().log10(),
@@ -644,7 +643,20 @@ mod tests {
     fn evaluates_with_parameters() {
         let p = compile_plot("y = a * sin(b * x)").expect("p");
         let params = vec![(Box::from("a"), 3.0), (Box::from("b"), 2.0)];
-        let y = eval_f64(&p.expr, &p.indep, PI / 4.0, &params);
+        let y = eval_f64(&p.expr, &p.indep, std::f64::consts::PI / 4.0, &params);
         assert!((y - 3.0).abs() < 1e-12);
+    }
+
+    #[test]
+    fn inverse_hyperbolic_sign_nan_and_angle_aliases() {
+        let p_asinh = compile_plot("asinh(x)").expect("asinh");
+        assert!((eval_f64(&p_asinh.expr, &p_asinh.indep, 1.0, &[]) - 1.0_f64.asinh()).abs() < 1e-12);
+
+        let p_sign = compile_plot("sign(sqrt(x))").expect("sign");
+        assert!(eval_f64(&p_sign.expr, &p_sign.indep, -1.0, &[]).is_nan());
+
+        let p_deg = compile_plot("sin(x градус)").expect("deg alias");
+        assert!(p_deg.params.is_empty(), "angle unit alias must not become a parameter");
+        assert!((eval_f64(&p_deg.expr, &p_deg.indep, 30.0, &[]) - 0.5).abs() < 1e-12);
     }
 }
