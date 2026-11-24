@@ -1,6 +1,3 @@
-//! Custom frameless window titlebar, segmented animated tab bar,
-//! and 8-direction border resize handling for `with_decorations(false)`.
-
 use crate::i18n::{Lang, tr};
 use crate::state::ActiveTab;
 use crate::style::{Palette, ThemeId};
@@ -16,12 +13,10 @@ pub struct TitlebarAction {
     pub tab_changed: Option<ActiveTab>,
 }
 
-/// Handles 8-direction window resizing around the edges of a frameless window.
 pub fn handle_frameless_resize(ctx: &Context, palette: &Palette) {
     let is_maximized = ctx.input(|i| i.viewport().maximized.unwrap_or(false));
     let rect = ctx.content_rect();
 
-    // Subtle 1px outer border when windowed so dark themes stand out cleanly.
     if !is_maximized {
         let painter = ctx.layer_painter(egui::LayerId::new(
             egui::Order::Foreground,
@@ -69,7 +64,6 @@ pub fn handle_frameless_resize(ctx: &Context, palette: &Palette) {
     }
 }
 
-/// Renders the custom titlebar inside a top panel.
 pub fn show_titlebar(
     ui: &mut Ui,
     tab: ActiveTab,
@@ -94,7 +88,6 @@ pub fn show_titlebar(
 
     let is_maximized = ui.ctx().input(|i| i.viewport().maximized.unwrap_or(false));
 
-    // Background + bottom hairline
     ui.painter().rect_filled(bar_rect, CornerRadius::ZERO, palette.bg_mantle);
     ui.painter().line_segment(
         [
@@ -104,16 +97,13 @@ pub fn show_titlebar(
         Stroke::new(1.0, palette.border_subtle),
     );
 
-    // Match the horizontal outer padding of the main calculator card below.
     let outer_pad = (bar_rect.width() * 0.018).clamp(14.0, 28.0);
     let btn_y = bar_rect.center().y;
     let ctrl_gap = 6.0f32;
     let left_edge = bar_rect.left() + outer_pad;
 
-    // ── Right: Theme, Language, Pin, Window Controls (uniform spacing & aligned right edge) ──
     let mut right_x = bar_rect.right() - outer_pad;
 
-    // Close button
     let close_rect = Rect::from_min_max(
         Pos2::new(right_x - 30.0, btn_y - 13.0),
         Pos2::new(right_x, btn_y + 13.0),
@@ -127,7 +117,6 @@ pub fn show_titlebar(
         ui.ctx().send_viewport_cmd(ViewportCommand::Close);
     }
 
-    // Maximize / Restore button
     let max_rect = Rect::from_min_max(
         Pos2::new(right_x - 30.0, btn_y - 13.0),
         Pos2::new(right_x, btn_y + 13.0),
@@ -140,7 +129,6 @@ pub fn show_titlebar(
         ui.ctx().send_viewport_cmd(ViewportCommand::Maximized(!is_maximized));
     }
 
-    // Minimize button
     let min_rect = Rect::from_min_max(
         Pos2::new(right_x - 30.0, btn_y - 13.0),
         Pos2::new(right_x, btn_y + 13.0),
@@ -155,14 +143,12 @@ pub fn show_titlebar(
         ui.ctx().send_viewport_cmd(ViewportCommand::Minimized(true));
     }
 
-    // Subtle divider between utility buttons and window controls
     ui.painter().line_segment(
         [Pos2::new(right_x, bar_rect.top() + 12.0), Pos2::new(right_x, bar_rect.bottom() - 12.0)],
         Stroke::new(1.0, palette.border_subtle),
     );
     right_x -= 9.0;
 
-    // Pin (Always on top)
     let pin_rect = Rect::from_min_max(
         Pos2::new(right_x - 28.0, btn_y - 13.0),
         Pos2::new(right_x, btn_y + 13.0),
@@ -183,7 +169,6 @@ pub fn show_titlebar(
         if always_on_top { Stroke::new(1.0, Palette::alpha(palette.accent, 130)) } else { Stroke::NONE },
         egui::StrokeKind::Inside,
     );
-    // Vector pin glyph
     let pc = pin_rect.center();
     ui.painter().circle_stroke(Pos2::new(pc.x, pc.y - 2.5), 3.2, Stroke::new(1.4, pin_fg));
     ui.painter().line_segment(
@@ -194,7 +179,6 @@ pub fn show_titlebar(
         action.pin_toggled = true;
     }
 
-    // Language toggle pill (RU / EN)
     let lang_rect = Rect::from_min_max(
         Pos2::new(right_x - 34.0, btn_y - 13.0),
         Pos2::new(right_x, btn_y + 13.0),
@@ -220,7 +204,6 @@ pub fn show_titlebar(
         action.lang_toggled = true;
     }
 
-    // Theme selector pill (color dot + label, measured for symmetrical inner padding)
     let theme_label = theme.label(lang);
     let theme_font = FontId::proportional(11.5);
     let theme_galley = ui
@@ -259,7 +242,6 @@ pub fn show_titlebar(
     }
     let right_limit = theme_rect.left() - 10.0;
 
-    // ── Center: proportional segmented tab control (smooth, jitter-free during resize) ──
     let tabs = [
         (ActiveTab::Notebook, s.tab_notebook),
         (ActiveTab::Scientific, s.tab_scientific),
@@ -271,7 +253,6 @@ pub fn show_titlebar(
     let tab_gap = 2.0f32;
     let avail_tabs_w = (right_limit - left_edge).max(160.0);
 
-    // Pick crisp font size & symmetrical per-tab horizontal padding so every label fits cleanly.
     let mut tab_fs = 13.0f32;
     let mut text_ws = [0.0f32; 4];
     for (i, (_, lbl)) in tabs.iter().enumerate() {
@@ -309,8 +290,6 @@ pub fn show_titlebar(
     let group_w = cursor_x + pad * 2.0;
     let group_h = tab_h + pad * 2.0;
 
-    // Continuous clamp from true window center into `[left_edge, right_limit - group_w]`
-    // so resizing never causes a discontinuous jump.
     let win_centered_left = bar_rect.center().x - group_w * 0.5;
     let max_left = (right_limit - group_w).max(left_edge);
     let group_left = win_centered_left.clamp(left_edge, max_left);
@@ -319,7 +298,6 @@ pub fn show_titlebar(
         Vec2::new(group_w, group_h),
     );
 
-    // ── Left: clean app title only (shown when it fits without pushing tabs) ──
     let title_galley = ui.painter().layout_no_wrap(
         "LuminaCalc".to_owned(),
         FontId::proportional(14.0),
@@ -348,7 +326,6 @@ pub fn show_titlebar(
         egui::StrokeKind::Inside,
     );
 
-    // Animate normalized tab index (NOT pixel coordinates) so resizing has zero lag/jitter.
     let active_idx = tabs.iter().position(|(t, _)| *t == tab).unwrap_or(0) as f32;
     let anim_idx = ui
         .ctx()
@@ -397,7 +374,6 @@ pub fn show_titlebar(
         }
     }
 
-    // Drag or double-click empty titlebar space to move / maximize window.
     if bar_resp.drag_started_by(egui::PointerButton::Primary) {
         ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
     }

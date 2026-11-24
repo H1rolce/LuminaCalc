@@ -1,12 +1,3 @@
-//! Two-column reactive math notebook (Soulver / Numi style).
-//!
-//! - Low-overhead render loop when idle: caches both the syntax-highlighted
-//!   `LayoutJob` and formatted result strings using a dirty-flag key.
-//! - Pixel-aligned gutter line numbers (left) and clickable results (right)
-//!   derived directly from `output.galley.rows`, staying aligned even with wrapping.
-//! - One-click result copy with toast feedback, right-click actions, and inline
-//!   error underlining + hover tooltips without intrusive popups.
-
 use crate::i18n::{Lang, Strings, format_error, tr};
 use crate::style::{self, Palette, ThemeId};
 use egui::text::LayoutJob;
@@ -26,9 +17,6 @@ struct LayoutKey {
     wrap_width_bits: u32,
 }
 
-/// Caches the syntax-highlighted [`LayoutJob`] (NOT `Arc<Galley>`).
-/// Caching `Galley` across frames can serve stale glyph-atlas UVs whenever
-/// another tab adds glyphs and triggers an `epaint` font-atlas repack.
 struct CachedLayout {
     key: LayoutKey,
     job: LayoutJob,
@@ -121,8 +109,6 @@ impl NotebookView {
         });
     }
 
-    /// Renders the two-column notebook and bottom variable/status bar.
-    /// Returns `(action, text_changed)`.
     pub fn show(
         &mut self,
         ui: &mut Ui,
@@ -145,19 +131,16 @@ impl NotebookView {
             text_changed = true;
         }
 
-        // Bottom bar height reserved first so the scroll area takes the rest cleanly.
         let bottom_h = 48.0;
         let avail = ui.available_rect_before_wrap();
         let editor_area_h = (avail.height() - bottom_h - 1.0).max(120.0);
 
-        // Two-column geometry
         let total_w = avail.width();
         let gutter_w = 42.0f32;
         let result_w = (total_w * 0.34).clamp(180.0, 340.0);
         let editor_w = (total_w - gutter_w - result_w).max(180.0);
         let divider_x = avail.left() + gutter_w + editor_w;
 
-        // Paint subtle tinted background for the right results column across the full height.
         let right_col_bg = Rect::from_min_max(
             Pos2::new(divider_x, avail.top()),
             Pos2::new(avail.right(), avail.top() + editor_area_h),
@@ -165,7 +148,6 @@ impl NotebookView {
         ui.painter().rect_filled(right_col_bg, CornerRadius::ZERO, palette.bg_mantle);
         style::hairline_v(ui.painter(), right_col_bg, divider_x, palette.border_subtle);
 
-        // Gutter background subtle tint
         let gutter_bg = Rect::from_min_max(
             Pos2::new(avail.left(), avail.top()),
             Pos2::new(avail.left() + gutter_w, avail.top() + editor_area_h),
@@ -183,16 +165,12 @@ impl NotebookView {
             .max_height(editor_area_h)
             .auto_shrink([false, false])
             .show(ui, |ui| {
-                // Allocate one unified canvas inside the scroll area so editor, gutter, and results scroll in lockstep.
                 let scroll_top_left = ui.cursor().min;
 
-                // Reserve background highlight slot painted *under* the text editor.
                 let active_row_shape = ui.painter().add(Shape::Noop);
 
-                // Sync notebook before layout in case text changed externally.
                 self.notebook.sync(&self.text);
 
-                // Borrow fields separately for the layouter closure.
                 let notebook = &mut self.notebook;
                 let layout_cache = &mut self.layout_cache;
                 let mut layouter = |ui: &Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| -> Arc<Galley> {
@@ -220,13 +198,11 @@ impl NotebookView {
                         *layout_cache = Some(CachedLayout { key, job: built.clone() });
                         built
                     };
-                    // `epaint`'s internal GalleyCache handles atlas invalidation automatically.
                     ui.painter().layout_job(job)
                 };
 
                 let text_edit_w = (editor_w - 18.0).max(120.0);
 
-                // Position the TextEdit cleanly after the gutter so ScrollArea tracks true height.
                 ui.add_space(10.0);
                 let output = ui
                     .horizontal_top(|ui| {
@@ -251,7 +227,6 @@ impl NotebookView {
                     self.notebook.sync(&self.text);
                 }
 
-                // Determine active logical line from cursor char index.
                 if let Some(range) = output.cursor_range {
                     let idx: usize = range.primary.index.into();
                     self.active_line = self
@@ -262,10 +237,8 @@ impl NotebookView {
                         .count();
                 }
 
-                // Ensure formatted results cache matches current document version and precision.
                 self.ensure_results_cache(*precision);
 
-                // Extract exact Y-bands for every logical line from `output.galley.rows`.
                 let min_h = (font_size * 1.35).max(18.0);
                 let mut line_bands: Vec<(f32, f32)> = Vec::with_capacity(self.notebook.lines().len());
                 let mut cur_top: Option<f32> = None;
@@ -288,7 +261,6 @@ impl NotebookView {
                     line_bands.push((t, cur_bot.max(t + min_h)));
                 }
 
-                // Paint active-line subtle highlight across both columns under the text.
                 if let Some(&(y0, y1)) = line_bands.get(self.active_line) {
                     let highlight_rect = Rect::from_min_max(
                         Pos2::new(scroll_top_left.x, y0 - 2.0),
@@ -304,7 +276,6 @@ impl NotebookView {
                     );
                 }
 
-                // Paint line numbers in the left gutter & interactive results in the right column.
                 let line_num_font = FontId::monospace((font_size - 2.5).max(10.0));
                 let result_font = FontId::monospace(font_size);
                 let err_font = FontId::proportional((font_size - 2.5).max(11.0));
@@ -319,7 +290,6 @@ impl NotebookView {
                     let y_center = 0.5 * (y0 + y1);
                     let is_active = i == self.active_line;
 
-                    // Gutter line number
                     let num_color = if is_active { palette.accent } else { palette.text_muted };
                     ui.painter().text(
                         Pos2::new(scroll_top_left.x + gutter_w - 10.0, y_center),
@@ -329,7 +299,6 @@ impl NotebookView {
                         num_color,
                     );
 
-                    // Active-line left accent bar in gutter
                     if is_active {
                         let bar = Rect::from_min_max(
                             Pos2::new(scroll_top_left.x, y0),
@@ -394,7 +363,6 @@ impl NotebookView {
                                 palette.success
                             };
 
-                            // Right-aligned clipped result string
                             let clipped = ui.painter().with_clip_rect(res_rect.shrink2(Vec2::new(6.0, 0.0)));
                             clipped.text(
                                 Pos2::new(res_rect.right() - 8.0, y_center),
@@ -468,11 +436,9 @@ impl NotebookView {
                     self.pending_insert = Some(ins);
                 }
 
-                // Bottom breathing room
                 ui.add_space(28.0);
             });
 
-        // ── Bottom status / variables bar ──
         if self.show_bottom_bar(ui, s, precision, palette) {
             text_changed = true;
         }
@@ -499,7 +465,6 @@ impl NotebookView {
             })
             .show(ui, |ui| {
                 ui.horizontal(|ui| {
-                    // Left: defined variables as clickable pills
                     ui.label(
                         egui::RichText::new(s.nb_vars_label)
                             .size(12.0)
@@ -538,7 +503,6 @@ impl NotebookView {
                         }
                     }
 
-                    // Right: precision + Examples + Clear
                     ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                         if ui.button(egui::RichText::new(s.nb_clear).size(12.0)).clicked() {
                             self.text.clear();

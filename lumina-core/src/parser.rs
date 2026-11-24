@@ -1,13 +1,3 @@
-//! AST and a precedence-climbing parser over lexer tokens.
-//!
-//! Precedence (low → high):
-//! `in`-conversion < `|` < `xor` < `&` < `<<`,`>>` < `+`,`-` < `*`,`/`,`mod`,`of`,`%`
-//! < implicit multiplication (`2x`, `120 km`) < unary `-`,`+`,`~` < `^` (right-assoc)
-//! < postfix `!`, `%`, `²`, `³` < primary.
-//!
-//! Implicit multiplication binds tighter than `/`, so `120 km/h` is `(120·km)/h`
-//! and units need no special grammar.
-
 use crate::error::{CalcError, CalcResult, ErrorKind, Span};
 use crate::lexer::{Kw, Op, Tok, Token};
 use crate::value::{Notation, Radix};
@@ -27,7 +17,6 @@ pub enum BinOp {
     Add,
     Sub,
     Mul,
-    /// Juxtaposition: `2x`, `120 km`. Same math as `Mul`, kept for offset units.
     ImplicitMul,
     Div,
     Mod,
@@ -76,8 +65,6 @@ pub enum Stmt {
     Assign { name: Box<str>, name_span: Span, value: Expr },
 }
 
-/// Parses a statement from a token stream (comments must already be removed or
-/// are ignored here).
 pub fn parse_stmt(tokens: &[Token<'_>], src_len: usize) -> CalcResult<Stmt> {
     let toks: Vec<Token<'_>> = tokens.iter().copied().filter(|t| t.tok != Tok::Comment).collect();
     if toks.is_empty() {
@@ -96,7 +83,6 @@ pub fn parse_stmt(tokens: &[Token<'_>], src_len: usize) -> CalcResult<Stmt> {
     Ok(Stmt::Expr(e))
 }
 
-/// Parses a single expression (used by the plotter / programmer input).
 pub fn parse_expr(tokens: &[Token<'_>], src_len: usize) -> CalcResult<Expr> {
     match parse_stmt(tokens, src_len)? {
         Stmt::Expr(e) => Ok(e),
@@ -105,8 +91,6 @@ pub fn parse_expr(tokens: &[Token<'_>], src_len: usize) -> CalcResult<Expr> {
     }
 }
 
-/// Appends missing closing `)` before any trailing comment to match Casio ClassWiz
-/// auto-closing on `=` (e.g. `sin(30` → `sin(30)`, `2*(3+4` → `2*(3+4)`).
 pub fn auto_close_parens(src: &str) -> std::borrow::Cow<'_, str> {
     let tokens = crate::lexer::lex(src);
     let mut depth = 0usize;
@@ -281,8 +265,6 @@ impl<'a> Parser<'_, 'a> {
         Ok(l)
     }
 
-    /// Juxtaposition: an operand directly followed by an identifier, `(`, `#line`,
-    /// or a number right after a closing `)` (e.g. `(2+3)4`, while `1 2` remains an error).
     fn implicit(&mut self) -> CalcResult<Expr> {
         let mut l = self.unary()?;
         loop {
@@ -322,13 +304,12 @@ impl<'a> Parser<'_, 'a> {
         let base = self.postfix()?;
         if self.peek() == Some(Tok::Op(Op::Caret)) {
             self.bump();
-            let exp = self.unary()?; // right-assoc, allows 2^-1
+            let exp = self.unary()?;
             return Ok(bin(BinOp::Pow, base, exp));
         }
         Ok(base)
     }
 
-    /// `%` is postfix percent unless an operand follows (then it is modulo).
     fn percent_is_postfix(&self) -> bool {
         !matches!(
             self.peek_at(1),
@@ -421,7 +402,6 @@ impl<'a> Parser<'_, 'a> {
     }
 }
 
-/// Parses a numeric literal body (prefix already stripped for radix literals).
 pub fn parse_number(text: &str, radix: Radix) -> Option<Decimal> {
     let clean: std::borrow::Cow<'_, str> =
         if text.contains('_') { text.replace('_', "").into() } else { text.into() };
@@ -446,7 +426,6 @@ mod tests {
         parse_stmt(&lex(src), src.len())
     }
 
-    /// Renders the AST as an S-expression for compact assertions.
     fn sx(e: &Expr) -> String {
         match &e.kind {
             ExprKind::Number(d, _) => d.to_string(),

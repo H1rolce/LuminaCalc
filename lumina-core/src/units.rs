@@ -1,16 +1,8 @@
-//! Runtime dimensional analysis.
-//!
-//! `uom` checks dimensions at compile time, which is great for library code but
-//! cannot interpret user-typed strings like `120 km/h in m/s`. The notebook needs
-//! dimensions as *data*, so we use a compact exponent vector over 8 base
-//! dimensions (7 SI + information) and a static alias table (EN + RU).
-
 use rust_decimal::Decimal;
 use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::OnceLock;
 
-/// Exponents of base dimensions: L, M, T, I, Θ, N, J, Info(bit).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 pub struct Dim(pub [i8; 8]);
 
@@ -41,7 +33,6 @@ impl Dim {
         Dim(r)
     }
 
-    /// Integer root of a dimension, `None` if exponents are not divisible.
     pub fn root(self, n: i8) -> Option<Dim> {
         if n == 0 {
             return None;
@@ -56,8 +47,6 @@ impl Dim {
         Some(Dim(r))
     }
 
-    /// Human readable SI representation, e.g. `kg·m/s²`. Uses named derived
-    /// units (N, J, W, Pa, V, Ω, C) when the dimension matches exactly.
     pub fn si_label(self) -> String {
         if let Some(name) = DERIVED.iter().find(|(d, _)| *d == self).map(|(_, n)| *n) {
             return name.to_owned();
@@ -123,7 +112,6 @@ const DERIVED: &[(Dim, &str)] = &[
     (Dim([0, 0, 1, 1, 0, 0, 0, 0]), "C"),
 ];
 
-/// Unicode superscript for an exponent; empty string for 1.
 pub fn superscript(e: i8) -> String {
     if e == 1 {
         return String::new();
@@ -141,7 +129,6 @@ pub fn superscript(e: i8) -> String {
     out
 }
 
-/// A unit definition: `si = (value + offset) * factor`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UnitDef {
     pub canonical: &'static str,
@@ -150,8 +137,6 @@ pub struct UnitDef {
     pub offset: Decimal,
 }
 
-/// Raw table row: aliases, dimension, factor numerator/denominator (decimal
-/// strings, `"pi"` allowed), offset.
 type Row = (&'static [&'static str], Dim, &'static str, &'static str, &'static str);
 
 const L: Dim = Dim::LENGTH;
@@ -172,7 +157,6 @@ const NONE: Dim = Dim::NONE;
 
 #[rustfmt::skip]
 const TABLE: &[Row] = &[
-    // ── length ──
     (&["m", "meter", "meters", "metre", "metres", "м", "метр", "метра", "метров"], L, "1", "1", "0"),
     (&["km", "kilometer", "kilometers", "км", "километр", "километра", "километров"], L, "1000", "1", "0"),
     (&["dm", "дм"], L, "0.1", "1", "0"),
@@ -187,7 +171,6 @@ const TABLE: &[Row] = &[
     (&["nmi", "мормиля"], L, "1852", "1", "0"),
     (&["au", "ае"], L, "149597870700", "1", "0"),
     (&["ly", "lightyear", "lightyears", "свгод"], L, "9460730472580800", "1", "0"),
-    // ── mass ──
     (&["kg", "kilogram", "kilograms", "кг", "килограмм", "килограмма", "килограммов"], M, "1", "1", "0"),
     (&["g", "gram", "grams", "г", "грамм", "грамма", "граммов"], M, "0.001", "1", "0"),
     (&["mg", "milligram", "мг"], M, "0.000001", "1", "0"),
@@ -195,7 +178,6 @@ const TABLE: &[Row] = &[
     (&["tonne", "tonnes", "т", "тонна", "тонны", "тонн"], M, "1000", "1", "0"),
     (&["lb", "lbs", "pound", "pounds", "фунт", "фунта", "фунтов"], M, "0.45359237", "1", "0"),
     (&["oz", "ounce", "ounces", "унция", "унций"], M, "0.028349523125", "1", "0"),
-    // ── time ──
     (&["s", "sec", "second", "seconds", "с", "сек", "секунда", "секунды", "секунд"], T, "1", "1", "0"),
     (&["ms", "millisecond", "milliseconds", "мс"], T, "0.001", "1", "0"),
     (&["µs", "us", "microsecond", "мкс"], T, "0.000001", "1", "0"),
@@ -205,17 +187,14 @@ const TABLE: &[Row] = &[
     (&["d", "day", "days", "сут", "день", "дня", "дней"], T, "86400", "1", "0"),
     (&["wk", "week", "weeks", "нед", "неделя", "недели", "недель"], T, "604800", "1", "0"),
     (&["yr", "year", "years", "год", "года", "лет"], T, "31557600", "1", "0"),
-    // ── speed ──
     (&["kn", "knot", "knots", "узел", "узла", "узлов"], SPEED, "1852", "3600", "0"),
     (&["mph"], SPEED, "1609.344", "3600", "0"),
     (&["kph", "kmh"], SPEED, "1000", "3600", "0"),
-    // ── area / volume ──
     (&["ha", "hectare", "hectares", "га", "гектар", "гектаров"], AREA, "10000", "1", "0"),
     (&["acre", "acres", "акр", "акров"], AREA, "4046.8564224", "1", "0"),
     (&["L", "l", "liter", "liters", "litre", "litres", "л", "литр", "литра", "литров"], VOLUME, "0.001", "1", "0"),
     (&["mL", "ml", "milliliter", "мл"], VOLUME, "0.000001", "1", "0"),
     (&["gal", "gallon", "gallons", "галлон", "галлонов"], VOLUME, "0.003785411784", "1", "0"),
-    // ── force / energy / power / pressure ──
     (&["N", "newton", "newtons", "Н", "ньютон"], FORCE, "1", "1", "0"),
     (&["kN", "кН"], FORCE, "1000", "1", "0"),
     (&["J", "joule", "joules", "Дж", "джоуль"], ENERGY, "1", "1", "0"),
@@ -236,11 +215,9 @@ const TABLE: &[Row] = &[
     (&["atm", "атм"], PRESSURE, "101325", "1", "0"),
     (&["psi"], PRESSURE, "6894.757293168361", "1", "0"),
     (&["mmHg", "ммртст"], PRESSURE, "133.322387415", "1", "0"),
-    // ── temperature ──
     (&["K", "kelvin", "К", "кельвин"], Dim::TEMP, "1", "1", "0"),
     (&["°C", "degC", "celsius", "цельсий"], Dim::TEMP, "1", "1", "273.15"),
     (&["°F", "degF", "fahrenheit", "фаренгейт"], Dim::TEMP, "5", "9", "459.67"),
-    // ── electricity ──
     (&["A", "amp", "ampere", "amperes", "А", "ампер"], Dim::CURRENT, "1", "1", "0"),
     (&["mA", "мА"], Dim::CURRENT, "0.001", "1", "0"),
     (&["V", "volt", "volts", "В", "вольт"], VOLT, "1", "1", "0"),
@@ -257,10 +234,8 @@ const TABLE: &[Row] = &[
     (&["rpm", "обмин"], FREQ, "1", "60", "0"),
     (&["mol", "моль"], Dim::AMOUNT, "1", "1", "0"),
     (&["cd", "candela", "кд"], Dim::LUMINOUS, "1", "1", "0"),
-    // ── angle (dimensionless, SI-style) ──
     (&["rad", "radian", "radians", "рад"], NONE, "1", "1", "0"),
     (&["deg", "degree", "degrees", "°", "град", "градус", "градуса", "градусов"], NONE, "pi", "180", "0"),
-    // ── information ──
     (&["bit", "bits", "бит", "бита", "битов"], Dim::INFO, "1", "1", "0"),
     (&["B", "byte", "bytes", "Б", "байт", "байта", "байтов"], Dim::INFO, "8", "1", "0"),
     (&["kB", "KB", "кБ", "КБ"], Dim::INFO, "8000", "1", "0"),
@@ -301,7 +276,6 @@ fn registry() -> &'static HashMap<&'static str, UnitDef> {
     })
 }
 
-/// Looks up a unit by any alias (case-sensitive: `mm` ≠ `Mm`).
 #[inline]
 pub fn lookup(name: &str) -> Option<&'static UnitDef> {
     registry().get(name)
@@ -312,7 +286,6 @@ pub fn is_unit(name: &str) -> bool {
     registry().contains_key(name)
 }
 
-/// Every alias, for tooling / autocompletion.
 pub fn all_aliases() -> impl Iterator<Item = &'static str> {
     TABLE.iter().flat_map(|r| r.0.iter().copied())
 }
@@ -360,7 +333,6 @@ mod tests {
     #[test]
     fn fahrenheit_exact() {
         let f = lookup("°F").expect("°F");
-        // 32 °F == 273.15 K exactly
         let si = (Decimal::from(32) + f.offset) * f.factor;
         assert_eq!(si.round_dp(20), Decimal::from_str("273.15").expect("lit"));
     }

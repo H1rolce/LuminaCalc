@@ -1,13 +1,7 @@
-//! Error types. Every error carries a byte span inside the source line so the UI
-//! can underline the exact location. Messages are English via `thiserror`;
-//! the UI layer localizes them by matching on [`ErrorKind`].
-
 use std::ops::Range;
 
 pub type Span = Range<usize>;
 
-/// High-level error classification matching scientific calculator conventions
-/// (`Syntax ERROR` vs `Math ERROR`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ErrorCategory {
     Syntax,
@@ -59,7 +53,6 @@ pub enum ErrorKind {
 }
 
 impl ErrorKind {
-    /// Classifies the error into [`ErrorCategory::Syntax`] or [`ErrorCategory::Math`].
     #[inline]
     pub const fn category(&self) -> ErrorCategory {
         match self {

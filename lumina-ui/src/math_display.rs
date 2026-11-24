@@ -1,10 +1,3 @@
-//! Interactive 2D Natural-V.P.A.M. mathematical renderer & hit-tester.
-//!
-//! Parses live (including incomplete) expressions into a spanned layout tree,
-//! renders stacked fractions, radicals, superscripts, empty slots `()` / `□`,
-//! and a live caret at `cursor_byte`, while emitting clickable [`HitZone`]s so
-//! users can click directly into numerators, denominators, or between characters.
-
 use crate::style::Palette;
 use egui::{Align2, Color32, CornerRadius, FontId, Painter, Pos2, Rect, Stroke, Vec2};
 use std::ops::Range;
@@ -14,7 +7,6 @@ pub enum MathNode {
     Seq { items: Vec<MathNode>, span: Range<usize> },
     Text { text: String, span: Range<usize> },
     Op { text: String, span: Range<usize> },
-    /// Empty editable slot inside `()` or `□`, with exact byte insertion offset.
     Slot { byte_pos: usize, span: Range<usize> },
     Frac { num: Box<MathNode>, den: Box<MathNode>, span: Range<usize> },
     Sup { base: Box<MathNode>, exp: Box<MathNode>, span: Range<usize> },
@@ -40,9 +32,7 @@ impl MathNode {
 #[derive(Debug, Clone, Copy)]
 pub struct Metrics {
     pub width: f32,
-    /// Height above the mathematical middle axis (where `+`, `=`, fraction bars sit).
     pub above: f32,
-    /// Height below the mathematical middle axis.
     pub below: f32,
 }
 
@@ -53,16 +43,13 @@ impl Metrics {
     }
 }
 
-/// Interactive hit zone collected during 2D painting for mouse click placement.
 #[derive(Debug, Clone, Copy)]
 pub struct HitZone {
     pub rect: Rect,
     pub byte_pos: usize,
-    /// Higher priority zones (like empty slots or character halves) win on overlap.
     pub priority: u8,
 }
 
-/// Visual caret geometry recorded during painting if `cursor_byte` matched.
 #[derive(Debug, Clone, Copy)]
 pub struct CaretPos {
     pub x: f32,
@@ -77,9 +64,7 @@ pub struct PaintFeedback {
 }
 
 impl PaintFeedback {
-    /// Resolves a mouse click position inside the 2D display to the closest byte offset.
     pub fn byte_at_pos(&self, pos: Pos2, fallback_end: usize) -> usize {
-        // 1. Prefer direct hit with highest priority (smallest enclosing rect on tie).
         let mut best_direct: Option<(u8, f32, usize)> = None;
         for h in &self.hits {
             if h.rect.contains(pos) {
@@ -97,7 +82,6 @@ impl PaintFeedback {
             return b;
         }
 
-        // 2. Otherwise pick nearest hit zone center (weighted vertically so numerator/denominator stay distinct).
         let mut best_dist = f32::INFINITY;
         let mut best_byte = fallback_end;
         for h in &self.hits {
@@ -113,7 +97,6 @@ impl PaintFeedback {
     }
 }
 
-/// Parses an expression string into a spanned [`MathNode`] tree. Never fails.
 pub fn parse_math(src: &str) -> MathNode {
     let tokens = tokenize_math(src);
     let mut p = MathParser { toks: &tokens, pos: 0, src_len: src.len() };
@@ -426,7 +409,6 @@ fn unwrap_paren(node: MathNode) -> MathNode {
     }
 }
 
-/// Measures a [`MathNode`] subtree at the given base `font_size`.
 pub fn measure(node: &MathNode, painter: &Painter, font_size: f32) -> Metrics {
     match node {
         MathNode::Seq { items, .. } => {
@@ -507,8 +489,6 @@ pub fn measure(node: &MathNode, painter: &Painter, font_size: f32) -> Metrics {
     }
 }
 
-/// Paints a [`MathNode`] subtree with its mathematical middle axis at `mid_y`,
-/// recording clickable [`HitZone`]s and computing the exact [`CaretPos`] for `cursor_byte`.
 #[allow(clippy::too_many_arguments)]
 pub fn paint_interactive(
     node: &MathNode,
@@ -566,7 +546,6 @@ pub fn paint_interactive(
             let bot_y = mid_y + sz.y * 0.5;
             painter.galley(Pos2::new(left_x, top_y), g, color);
 
-            // Emit per-character hit zones for accurate mouse clicking inside numbers (e.g. `7|7`).
             let char_count = text.chars().count().max(1);
             let cw = sz.x / char_count as f32;
             let byte_span_len = span.end.saturating_sub(span.start);
@@ -700,7 +679,6 @@ pub fn paint_interactive(
                 Pos2::new(left_x + total_w, mid_y + gap + md.height()),
             );
 
-            // Subtle hover highlight on numerator / denominator area to invite mouse clicking
             let num_contains_cursor = cursor_byte >= num.span().start && cursor_byte <= num.span().end;
             let den_contains_cursor = cursor_byte >= den.span().start && cursor_byte <= den.span().end;
             if let Some(hp) = hover_pos {
@@ -719,11 +697,9 @@ pub fn paint_interactive(
                 }
             }
 
-            // Fallback hit zones for numerator / denominator margins (priority 1, below inner chars)
             fb.hits.push(HitZone { rect: num_rect, byte_pos: num.span().end, priority: 1 });
             fb.hits.push(HitZone { rect: den_rect, byte_pos: den.span().end, priority: 1 });
 
-            // Edge hit zones to place cursor cleanly BEFORE or AFTER the entire fraction
             let edge_w = (pad_x * 0.65).max(4.0);
             fb.hits.push(HitZone {
                 rect: Rect::from_min_max(
@@ -742,12 +718,10 @@ pub fn paint_interactive(
                 priority: 2,
             });
 
-            // Paint numerator centered above bar
             let num_x = left_x + (total_w - mn.width) * 0.5;
             let num_mid_y = mid_y - gap - mn.below;
             paint_interactive(num, painter, num_x, num_mid_y, sub_fs, cursor_byte, hover_pos, palette, fb);
 
-            // Crisp horizontal vinculum (accented lightly when cursor is inside the fraction)
             let bar_thick = (font_size * 0.085).clamp(1.2, 2.5);
             let bar_col = if num_contains_cursor || den_contains_cursor {
                 Palette::lerp(palette.text_primary, palette.accent, 0.45)
@@ -762,12 +736,10 @@ pub fn paint_interactive(
                 Stroke::new(bar_thick, bar_col),
             );
 
-            // Paint denominator centered below bar
             let den_x = left_x + (total_w - md.width) * 0.5;
             let den_mid_y = mid_y + gap + md.above;
             paint_interactive(den, painter, den_x, den_mid_y, sub_fs, cursor_byte, hover_pos, palette, fb);
 
-            // Caret at exact start/end of the outer fraction (outside its parens)
             if cursor_byte == span.start && fb.caret.is_none() {
                 fb.caret = Some(CaretPos {
                     x: left_x,
@@ -905,7 +877,6 @@ fn paint_paren_curve(painter: &Painter, x: f32, top_y: f32, bot_y: f32, bulge: f
     painter.add(egui::Shape::line(pts, stroke));
 }
 
-/// Paints a stacked rational result right-aligned inside `rect`, e.g. `23/12` or mixed `1 11/12`.
 pub fn paint_stacked_fraction_result(
     painter: &Painter,
     rect: Rect,
@@ -965,7 +936,6 @@ pub fn paint_stacked_fraction_result(
     }
 }
 
-/// Paints the classic Casio `□ / □` fraction button icon centered at `center`.
 pub fn paint_fraction_key_icon(painter: &Painter, center: Pos2, scale: f32, color: Color32) {
     let box_sz = (6.5 * scale).clamp(5.5, 10.0);
     let bar_w = (14.0 * scale).clamp(12.0, 22.0);

@@ -1,8 +1,3 @@
-//! Reactive multi-line math notebook (Soulver / Numi style).
-//!
-//! Caches parsed ASTs per line so editing one line does not re-lex or re-parse
-//! unchanged lines, while still propagating variable and `#line` updates top-down.
-
 use crate::error::{CalcError, CalcResult, ErrorKind};
 use crate::eval::{self, Env, Special};
 use crate::highlight::{self, HighlightSpan};
@@ -38,21 +33,13 @@ impl LineOutput {
 
 #[derive(Debug, Clone)]
 pub struct LineEntry {
-    /// Raw text of this line (without trailing `\n` or `\r`).
     pub source: String,
-    /// Byte offset of this line inside the full document string.
     pub byte_start: usize,
-    /// Byte length including any `\r` trimmed from `source`.
     pub raw_len: usize,
-    /// Cached parsed statement (recomputed only when `source` changes).
     parsed: CalcResult<Stmt>,
-    /// Semantic highlight spans relative to `source`.
     pub highlights: Vec<HighlightSpan>,
-    /// Evaluated output.
     pub output: LineOutput,
-    /// Variable assigned by this line, if any.
     pub assigned_var: Option<Box<str>>,
-    /// True if this line is a heading (`# ...`), for subtle UI styling.
     pub is_heading: bool,
 }
 
@@ -106,14 +93,11 @@ impl Notebook {
         &self.raw_text
     }
 
-    /// Synchronizes the notebook with `text`. Returns `true` if recomputed.
-    /// When `text` is identical to the cached snapshot, does zero allocations.
     pub fn sync(&mut self, text: &str) -> bool {
         if text == self.raw_text && (!self.lines.is_empty() || text.is_empty() && self.version > 0) {
             return false;
         }
 
-        // Preserve previous parsed ASTs keyed by line index (fast path for typing on 1 line).
         let old_lines = std::mem::take(&mut self.lines);
         let mut old_by_text: std::collections::HashMap<String, CalcResult<Stmt>> =
             std::collections::HashMap::with_capacity(old_lines.len());
@@ -211,7 +195,7 @@ impl Notebook {
                 assigned_var,
                 is_heading,
             });
-            offset += raw_len + 1; // +1 for '\n'
+            offset += raw_len + 1;
         }
 
         self.raw_text.clear();

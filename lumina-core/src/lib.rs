@@ -1,9 +1,3 @@
-//! LuminaCalc core calculation engine.
-//!
-//! Zero GUI dependencies: exact decimal arithmetic, unit dimensional analysis,
-//! reactive multi-line notebook with AST caching, semantic syntax highlighting,
-//! 2D function plotting helpers, and bit-level programmer register.
-
 pub mod error;
 pub mod eval;
 pub mod highlight;

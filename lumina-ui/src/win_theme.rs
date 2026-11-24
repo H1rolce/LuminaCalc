@@ -1,7 +1,3 @@
-//! Reads the Windows system accent color and Dark/Light app theme from the registry
-//! (`HKCU\Software\Microsoft\Windows\DWM` and `...\Themes\Personalize`).
-//! Falls back gracefully on non-Windows platforms or missing registry keys.
-
 use egui::Color32;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -19,7 +15,6 @@ impl Default for SystemTheme {
     }
 }
 
-/// Reads the current Windows accent color and dark/light preference.
 pub fn read_system_theme() -> SystemTheme {
     #[cfg(target_os = "windows")]
     {
@@ -29,7 +24,6 @@ pub fn read_system_theme() -> SystemTheme {
         )
         .is_none_or(|v| v == 0);
 
-        // `AccentColor` is stored as 0xAABBGGRR.
         let accent = read_hkcu_dword(r"Software\Microsoft\Windows\DWM", "AccentColor")
             .map(|abgr| {
                 let r = (abgr & 0xFF) as u8;
@@ -38,7 +32,6 @@ pub fn read_system_theme() -> SystemTheme {
                 Color32::from_rgb(r, g, b)
             })
             .or_else(|| {
-                // Fallback: `ColorizationColor` is stored as 0xAARRGGBB.
                 read_hkcu_dword(r"Software\Microsoft\Windows\DWM", "ColorizationColor").map(|argb| {
                     let r = ((argb >> 16) & 0xFF) as u8;
                     let g = ((argb >> 8) & 0xFF) as u8;
@@ -57,21 +50,17 @@ pub fn read_system_theme() -> SystemTheme {
     }
 }
 
-/// Perceived relative luminance in `[0.0, 1.0]` (Rec. 709).
 #[inline]
 pub fn luminance(c: Color32) -> f32 {
     (0.2126 * c.r() as f32 + 0.7152 * c.g() as f32 + 0.0722 * c.b() as f32) / 255.0
 }
 
-/// Ensures an accent color remains legible against dark or light surfaces.
 pub fn tune_accent_for_mode(accent: Color32, dark: bool) -> Color32 {
     let lum = luminance(accent);
     if dark && lum < 0.34 {
-        // Lift very dark system accents towards white so text/borders pop on dark backgrounds.
         let t = ((0.38 - lum) * 1.4).clamp(0.15, 0.52);
         crate::style::Palette::lerp(accent, Color32::WHITE, t)
     } else if !dark && lum > 0.66 {
-        // Deepen very bright system accents on light backgrounds.
         let t = ((lum - 0.58) * 1.3).clamp(0.15, 0.48);
         crate::style::Palette::lerp(accent, Color32::BLACK, t)
     } else {
@@ -107,7 +96,6 @@ fn read_hkcu_dword(subkey: &str, value: &str) -> Option<u32> {
     let mut data: u32 = 0;
     let mut size: u32 = std::mem::size_of::<u32>() as u32;
 
-    // SAFETY: valid null-terminated UTF-16 strings and properly sized output buffer for REG_DWORD.
     let status = unsafe {
         RegGetValueW(
             HKEY_CURRENT_USER,

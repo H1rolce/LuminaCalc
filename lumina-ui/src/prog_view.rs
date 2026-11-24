@@ -1,6 +1,3 @@
-//! Programmer (interactive 64/32/16/8-bit grid + DEC/HEX/OCT/BIN)
-//! and Engineering unit converter view.
-
 use crate::i18n::{Lang, Strings, format_error, tr};
 use crate::style::{self, Palette};
 use egui::{
@@ -108,10 +105,8 @@ pub struct ProgrammerView {
     bin_buf: String,
     expr_buf: String,
     expr_err: Option<CalcError>,
-    /// Drag-paint target state when dragging pointer across bit tiles.
     bit_paint_state: Option<bool>,
 
-    // Engineering unit converter state
     conv_cat: usize,
     conv_val: String,
     conv_from: usize,
@@ -196,7 +191,6 @@ impl ProgrammerView {
         let mut action = ProgAction::None;
         let mut dirty = false;
 
-        // Release drag-paint when pointer button is released anywhere.
         if !ui.ctx().input(|i| i.pointer.primary_down()) {
             self.bit_paint_state = None;
         }
@@ -490,8 +484,6 @@ impl ProgrammerView {
 
                 ui.add_space(10.0);
 
-                // Render 2 rows of 32 bits (8 nibbles per row) for 64-bit,
-                // or 1 row of 32 bits for 32/16/8-bit.
                 let row_tops: &[u32] = if self.reg.width == BitWidth::Bits64 {
                     &[63, 31]
                 } else {

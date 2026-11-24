@@ -1,6 +1,3 @@
-//! Root application state, keyboard shortcuts, global hotkey integration,
-//! clipboard access, debounced TOML persistence, and top-level layout.
-
 use crate::i18n::{Lang, tr};
 use crate::notebook_view::{NotebookAction, NotebookView};
 use crate::plot_view::{PlotAction, PlotView};
@@ -51,7 +48,6 @@ impl LuminaApp {
                 .send_viewport_cmd(ViewportCommand::WindowLevel(WindowLevel::AlwaysOnTop));
         }
 
-        // Register global summon hotkey (Ctrl+Alt+Space) without ever panicking if unavailable.
         let hotkey_mgr = setup_global_hotkey(&cc.egui_ctx);
 
         let notebook = NotebookView::new(saved.notebook_text);
@@ -236,7 +232,6 @@ impl eframe::App for LuminaApp {
 
         self.handle_shortcuts(&ctx);
 
-        // ── Custom frameless titlebar ──
         let mut tb_action = None;
         egui::Panel::top("lumina_titlebar")
             .frame(Frame::NONE)
@@ -267,7 +262,6 @@ impl eframe::App for LuminaApp {
             }
         }
 
-        // ── Main content area ──
         egui::CentralPanel::default()
             .frame(Frame::NONE.fill(self.palette.bg_base))
             .show(ui, |ui| {
@@ -346,13 +340,10 @@ impl eframe::App for LuminaApp {
                 }
             });
 
-        // Frameless 8-way resize edges & crisp outer 1px border
         titlebar::handle_frameless_resize(&ctx, &self.palette);
 
-        // Animated foreground toast overlay
         self.toasts.paint(&ctx, &self.palette);
 
-        // Debounced TOML persistence
         self.flush_save_if_due(&ctx);
     }
 }

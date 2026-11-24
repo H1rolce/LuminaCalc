@@ -1,14 +1,3 @@
-//! Responsive Scientific / Engineering calculator inspired by Casio fx-991ES PLUS / SC-991ESP.
-//!
-//! Features:
-//! - Full dynamic scaling: fills available width and height cleanly with comfortable margins
-//! - Interactive 2D Natural-V.P.A.M. display: click directly into numerators, denominators,
-//!   between digits, or outside fractions; live blinking caret rendered inside the 2D formula
-//! - Real cursor-based fraction editing (`(num)/(den)`): typing `77` stays inside the numerator
-//!   until you click the denominator or press `▼`/`▶`/`Tab`
-//! - Stacked fraction results (`23/12`, mixed `1 11/12` via `SHIFT + S⇔D`) & `ENG` notation
-//! - `SHIFT`, `HYP`, `DEG/RAD/GRAD`, memory (`MC/MR/M-/M+/STO`), `Ans`, and live history tape
-
 use crate::i18n::{Lang, Strings, format_error, tr};
 use crate::math_display::{self, MathNode, PaintFeedback};
 use crate::state::SavedSciHistoryItem;
@@ -24,13 +13,9 @@ use lumina_core::{
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum DisplayMode {
-    /// Improper stacked fraction (`23/12`).
     Fraction,
-    /// Mixed stacked fraction (`1 11/12`), toggled via `SHIFT + S⇔D`.
     MixedFraction,
-    /// Standard grouped decimal.
     Decimal,
-    /// Engineering notation (exponent multiple of 3).
     Engineering,
 }
 
@@ -46,11 +31,8 @@ enum KeyTone {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum AfterCommit {
-    /// Start a fresh expression (digits, constants, `(`, prefix functions).
     Replace,
-    /// Chain from previous result as `Ans<token>` (binary & postfix operators).
     ChainAns,
-    /// Keep editing the current expression as-is (`)`, `,`).
     Keep,
 }
 
@@ -154,7 +136,6 @@ pub enum SciAction {
 
 pub struct ScientificView {
     pub expr: String,
-    /// Byte offset of the interactive caret inside `self.expr` (always on a UTF-8 boundary).
     pub cursor: usize,
     pub angle_unit: AngleUnit,
     display_mode: DisplayMode,
@@ -316,8 +297,6 @@ impl ScientificView {
         }
     }
 
-    /// Inserts `token` at `self.cursor`, keeping the caret right after the inserted text.
-    /// Typing `7`, `7` inside `(|)/()` naturally produces `(77|)/()`.
     pub fn insert_token(&mut self, token: &str, replace_if_committed: bool) {
         let mode = if replace_if_committed {
             AfterCommit::Replace
@@ -351,8 +330,6 @@ impl ScientificView {
         self.recompute();
     }
 
-    /// Finds the start byte of the operand immediately preceding `self.cursor`
-    /// (without crossing an unmatched `(`).
     fn operand_start_before_cursor(&self) -> Option<usize> {
         let before = &self.expr[..self.cursor];
         let trimmed_end = before.trim_end().len();
@@ -364,7 +341,6 @@ impl ScientificView {
 
         if last == ')' {
             let b = find_matching_open_paren(slice, slice.len() - 1)?;
-            // Include function name before `(` if any (e.g. `sin(30)`).
             let mut start = b;
             for (fb, fc) in slice[..b].char_indices().rev() {
                 if fc.is_alphanumeric() || fc == '_' {
@@ -390,11 +366,6 @@ impl ScientificView {
         None
     }
 
-    /// Inserts an interactive fraction template `(num)/(den)` at `self.cursor`.
-    /// - If an operand immediately precedes the cursor (e.g. `77|`), wraps it into `(77)/(|)`
-    ///   with the cursor inside the denominator.
-    /// - Otherwise inserts `(|)/()` with the cursor inside the numerator so you can type `77`
-    ///   freely without jumping down.
     pub fn insert_fraction(&mut self, mixed: bool) {
         if self.committed {
             self.expr.clear();
@@ -407,11 +378,10 @@ impl ScientificView {
         if mixed {
             if self.expr[..self.cursor].trim().is_empty() {
                 self.expr.insert_str(self.cursor, " + ()/()");
-                // Place caret before ` + ()/()` so user types the whole part first.
             } else {
                 let tpl = " + ()/()";
                 self.expr.insert_str(self.cursor, tpl);
-                self.cursor += 4; // inside numerator `(|)/()`
+                self.cursor += 4;
             }
             self.recompute();
             return;
@@ -421,17 +391,16 @@ impl ScientificView {
             let trimmed_end = self.expr[..self.cursor].trim_end().len();
             let operand = self.expr[op_start..trimmed_end].to_owned();
             let replacement = format!("({operand})/()");
-            let den_cursor = op_start + replacement.len() - 1; // inside `()`
+            let den_cursor = op_start + replacement.len() - 1;
             self.expr.replace_range(op_start..self.cursor, &replacement);
             self.cursor = den_cursor;
         } else {
             self.expr.insert_str(self.cursor, "()/()");
-            self.cursor += 1; // inside numerator `(|)/()`
+            self.cursor += 1;
         }
         self.recompute();
     }
 
-    /// Moves caret right, smoothly stepping across `)/(` from numerator into denominator.
     pub fn move_right(&mut self) {
         self.clamp_cursor();
         self.committed = false;
@@ -444,7 +413,6 @@ impl ScientificView {
         }
     }
 
-    /// Moves caret left, smoothly stepping across `)/(` from denominator back into numerator.
     pub fn move_left(&mut self) {
         self.clamp_cursor();
         self.committed = false;
@@ -457,8 +425,6 @@ impl ScientificView {
         }
     }
 
-    /// Inserts `(` cleanly. Inside a fraction numerator/denominator, inserts a balanced `()`
-    /// pair with the cursor inside `(|)` so the enclosing fraction never collapses while typing.
     pub fn insert_open_paren(&mut self) {
         if self.committed {
             self.expr.clear();
@@ -478,7 +444,6 @@ impl ScientificView {
         self.recompute();
     }
 
-    /// Inserts `)` when unclosed `(` exist, or smoothly steps past an auto-balanced inner `)`.
     pub fn insert_close_paren(&mut self) {
         self.clamp_cursor();
         self.committed = false;
@@ -513,7 +478,6 @@ impl ScientificView {
         }
     }
 
-    /// Finds the innermost enclosing `(`..`)` pair containing `pos`.
     fn enclosing_parens_at(&self, pos: usize) -> Option<(usize, usize)> {
         let mut depth = 0i32;
         let mut open_pos = None;
@@ -547,8 +511,6 @@ impl ScientificView {
         None
     }
 
-    /// Walks outward from `self.cursor` through nested `(...)` groups to find the
-    /// enclosing fraction numerator or denominator `(open, close)`.
     fn enclosing_fraction(&self) -> Option<(usize, usize)> {
         let mut probe = self.cursor;
         while let Some((open, close)) = self.enclosing_parens_at(probe) {
@@ -562,13 +524,11 @@ impl ScientificView {
         None
     }
 
-    /// Jumps from numerator to denominator, or exits denominator to after the fraction.
     pub fn jump_fraction_down(&mut self) -> bool {
         self.clamp_cursor();
         self.committed = false;
 
         if let Some((open, close)) = self.enclosing_fraction() {
-            // Case 1: currently inside numerator `(...|...)/(...)` -> jump to denominator!
             if self.expr[close..].starts_with(")/(") {
                 let den_open = close + 2;
                 let mut d = 0i32;
@@ -578,7 +538,7 @@ impl ScientificView {
                         ')' => {
                             d -= 1;
                             if d == 0 {
-                                self.cursor = den_open + rel; // end of denominator (or empty slot)
+                                self.cursor = den_open + rel;
                                 return true;
                             }
                         }
@@ -588,14 +548,12 @@ impl ScientificView {
                 self.cursor = (close + 3).min(self.expr.len());
                 return true;
             }
-            // Case 2: currently inside denominator `(...)/(...|...)` -> exit after `)`!
             if open >= 2 && self.expr[..open + 1].ends_with(")/(") {
                 self.cursor = (close + 1).min(self.expr.len());
                 return true;
             }
         }
 
-        // Fallback: jump into the next empty `()` slot if any exists ahead.
         if let Some(rel) = self.expr[self.cursor..].find("()") {
             self.cursor += rel + 1;
             return true;
@@ -603,7 +561,6 @@ impl ScientificView {
         false
     }
 
-    /// Jumps from denominator back up into the numerator.
     pub fn jump_fraction_up(&mut self) -> bool {
         self.clamp_cursor();
         self.committed = false;
@@ -612,14 +569,12 @@ impl ScientificView {
             && open >= 2
             && self.expr[..open + 1].ends_with(")/(")
         {
-            // End of numerator is `open - 2` (right before `)/(`).
             self.cursor = open - 2;
             return true;
         }
         false
     }
 
-    /// Smart backspace that cleanly removes empty fractions or unwraps `(num)/()` -> `num`.
     pub fn backspace(&mut self) {
         self.clamp_cursor();
         self.committed = false;
@@ -629,7 +584,6 @@ impl ScientificView {
             return;
         }
 
-        // Case 1: inside empty numerator `(|)/()` -> remove entire `()/()`
         if self.cursor >= 1
             && self.cursor + 4 <= self.expr.len()
             && &self.expr[self.cursor - 1..self.cursor + 4] == "()/()"
@@ -640,7 +594,6 @@ impl ScientificView {
             return;
         }
 
-        // Case 2: inside empty denominator `(num)/(|)` -> unwrap to `num|`
         if self.cursor >= 3
             && self.expr[..self.cursor].ends_with(")/(")
             && self.expr[self.cursor..].starts_with(')')
@@ -656,7 +609,6 @@ impl ScientificView {
             }
         }
 
-        // Case 2b: inside an empty non-fraction paren pair `(|)` -> delete both `(` and `)`
         if self.cursor >= 1
             && self.expr[..self.cursor].ends_with('(')
             && self.expr[self.cursor..].starts_with(')')
@@ -667,7 +619,6 @@ impl ScientificView {
             return;
         }
 
-        // Case 3: right after a closed fraction `(num)/(den)|` -> step inside denominator and delete
         if self.expr[..self.cursor].ends_with(')') {
             let close = self.cursor - 1;
             if let Some(open) = find_matching_open_paren(&self.expr, close)
@@ -676,7 +627,6 @@ impl ScientificView {
             {
                 self.cursor = close;
                 if close == open + 1 {
-                    // Empty denominator: recurse once to unwrap cleanly.
                     self.backspace();
                 } else if let Some((prev_b, _)) = self.expr[..self.cursor].char_indices().next_back() {
                     self.expr.replace_range(prev_b..self.cursor, "");
@@ -687,7 +637,6 @@ impl ScientificView {
             }
         }
 
-        // Default: smart delete — remove multi-char tokens (`sin(`, `Ans`, `pi`, ` * 10^`, …) as a unit.
         let del_len = smart_token_len_before(&self.expr[..self.cursor]);
         if del_len > 0 && del_len <= self.cursor {
             let start = self.cursor - del_len;
@@ -819,7 +768,6 @@ impl ScientificView {
         self.recompute();
     }
 
-    /// Handles physical keyboard input directly on the 2D display when the raw text bar is not focused.
     fn handle_direct_keyboard(&mut self, ui: &Ui, precision: u32) {
         let mut typed = String::new();
         let mut enter = false;
@@ -1219,7 +1167,6 @@ impl ScientificView {
                     });
                 });
 
-                // ── 2D Interactive Math Canvas (click numerator/denominator/chars) ──
                 ui.add_space(4.0);
                 let res_h = (inner_disp_h * 0.30).clamp(38.0, 72.0);
                 let input_fs = (13.0 * scale).clamp(11.5, 16.0);
@@ -1316,7 +1263,6 @@ impl ScientificView {
 
                 ui.add_space(4.0);
 
-                // Compact synchronized raw text bar
                 let err_span_opt = self
                     .last_eval
                     .as_ref()
@@ -1355,7 +1301,6 @@ impl ScientificView {
 
                 ui.add_space(4.0);
 
-                // ── Large Result Area ──
                 let (res_rect, res_resp) = ui.allocate_exact_size(
                     Vec2::new(ui.available_width(), res_h),
                     Sense::click(),
@@ -1469,7 +1414,6 @@ impl ScientificView {
         lang: Lang,
         palette: &Palette,
     ) {
-        // Exact 6-column grid aligned vertically with the 6-column scientific keypad below.
         let ctrl_w = (avail_w - gap_x * 5.0) / 6.0;
         let ctrl_size = Vec2::new(ctrl_w, ctrl_h);
         let mut const_anchor: Option<egui::Rect> = None;
@@ -1943,9 +1887,6 @@ fn char_to_byte_idx(s: &str, char_idx: usize) -> usize {
     s.char_indices().nth(char_idx).map_or(s.len(), |(b, _)| b)
 }
 
-/// Returns the byte length of the atomic token immediately before the cursor so
-/// `DEL` removes multi-char tokens (`sin(`, `cos(`, `Ans`, `pi`, ` * 10^`, ` mod `, …)
-/// in a single keypress without corrupting the input string.
 fn smart_token_len_before(before: &str) -> usize {
     const FIXED: &[&str] = &[
         " * 10^",
@@ -1974,7 +1915,6 @@ fn smart_token_len_before(before: &str) -> usize {
                 break;
             }
         }
-        // Handle implicit multiplication like `2sin(`: strip leading digits from candidate name.
         let lead_digits = stem[start..].bytes().take_while(|b| b.is_ascii_digit()).count();
         let name_start = start + lead_digits;
         let name = &stem[name_start..];
@@ -1999,7 +1939,6 @@ fn smart_token_len_before(before: &str) -> usize {
     before.chars().next_back().map_or(0, char::len_utf8)
 }
 
-/// Finds the byte index of the `(` matching the `)` at `close_byte`.
 fn find_matching_open_paren(s: &str, close_byte: usize) -> Option<usize> {
     let mut depth = 0i32;
     for (b, c) in s[..=close_byte].char_indices().rev() {
@@ -2232,7 +2171,6 @@ mod tests {
         v.insert_token("2", true);
         assert_eq!(v.expr, "(77)/(12)");
 
-        // Exit denominator and add another fraction
         assert!(v.jump_fraction_down());
         assert_eq!(v.cursor, v.expr.len());
     }
@@ -2272,8 +2210,8 @@ mod tests {
         v.insert_fraction(false);
         v.insert_token("5", true);
         assert_eq!(v.expr, "((2)/(5))/()");
-        assert!(v.jump_fraction_down()); // exit inner denominator -> end of outer numerator
-        assert!(v.jump_fraction_down()); // jump into outer denominator
+        assert!(v.jump_fraction_down());
+        assert!(v.jump_fraction_down());
         v.insert_token("4", true);
         assert_eq!(v.expr, "((2)/(5))/(4)");
         let val = v.last_eval.as_ref().expect("eval").as_ref().expect("ok");
@@ -2287,14 +2225,12 @@ mod tests {
         v.evaluate_commit(8);
         assert!(v.committed);
 
-        // Postfix `%` after commit chains from `Ans` (`Ans%` = 0.2), just like Casio ClassWiz.
         v.execute_key_action(ins_chain("%"), 8);
         assert_eq!(v.expr, "Ans%");
         let val = v.last_eval.as_ref().expect("eval").as_ref().expect("ok");
         assert_eq!(val.plain(8), "0.2");
 
         v.evaluate_commit(8);
-        // Shifted prefix function `asin(` after commit starts a fresh expression.
         v.execute_key_action(ins_new("asin("), 8);
         assert_eq!(v.expr, "asin(");
     }
@@ -2306,20 +2242,17 @@ mod tests {
         v.evaluate_commit(8);
         assert_eq!(v.ans.as_ref().expect("ans").plain(8), "5");
 
-        // Binary operator `*` after `=` chains `Ans * `, so `2+3=` then `*4=` yields 20 (not 14).
         v.execute_key_action(ins_chain(" * "), 8);
         assert_eq!(v.expr, "Ans * ");
         v.execute_key_action(ins_new("4"), 8);
         v.evaluate_commit(8);
         assert_eq!(v.ans.as_ref().expect("ans").plain(8), "20");
 
-        // Power operator `^` after `=` chains `Ans^`.
         v.execute_key_action(ins_chain("^"), 8);
         v.execute_key_action(ins_new("2"), 8);
         v.evaluate_commit(8);
         assert_eq!(v.ans.as_ref().expect("ans").plain(8), "400");
 
-        // Digit after `=` starts fresh.
         v.execute_key_action(ins_new("7"), 8);
         assert_eq!(v.expr, "7");
     }
@@ -2329,7 +2262,6 @@ mod tests {
         let mut v = ScientificView::default();
         assert_eq!(v.angle_unit, AngleUnit::Deg);
         v.insert_token("sin(30", true);
-        // Live preview already evaluates auto-closed expression.
         assert_eq!(v.last_eval.as_ref().expect("eval").as_ref().expect("ok").plain(8), "0.5");
 
         v.evaluate_commit(8);
@@ -2367,7 +2299,6 @@ mod tests {
 
     #[test]
     fn reference_fraction_with_parentheses_equals_14_over_3() {
-        // Exact flow from Brauberg SC-991ESP reference: `((2 + 5) * 2) / 3 = 14/3`
         let mut v = ScientificView::default();
         v.insert_fraction(false);
         assert_eq!(v.expr, "()/()");
@@ -2375,7 +2306,7 @@ mod tests {
         v.insert_open_paren();
         assert_eq!(v.expr, "(())/()");
         v.insert_token("2 + 5", false);
-        v.insert_close_paren(); // steps smoothly past inner `)`
+        v.insert_close_paren();
         v.insert_token(" * 2", false);
         assert_eq!(v.expr, "((2 + 5) * 2)/()");
 
@@ -2386,7 +2317,6 @@ mod tests {
         let val = v.last_eval.as_ref().expect("eval").as_ref().expect("ok");
         assert_eq!(decimal_to_fraction(val.si, 10_000), Some((14, 3)));
 
-        // Stray `)` is ignored; nested paren inside fraction still navigates cleanly via `▼`.
         v.clear_all();
         v.insert_close_paren();
         assert_eq!(v.expr, "");

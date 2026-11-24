@@ -1,5 +1,3 @@
-//! Programmer & bit-manipulation core (8 / 16 / 32 / 64-bit, signed / unsigned).
-
 use crate::error::CalcResult;
 use crate::eval::{Env, eval_str};
 use crate::value::{Radix, group_from_right};
@@ -211,7 +209,6 @@ impl BitRegister {
         }
     }
 
-    /// Parses user input in a specific radix (tolerating spaces, `_`, and `0x`/`0b`/`0o` prefixes).
     pub fn parse_radix(&mut self, input: &str, radix: Radix) -> bool {
         let cleaned: String = input
             .chars()
@@ -241,8 +238,6 @@ impl BitRegister {
         false
     }
 
-    /// Evaluates a bitwise/arithmetic expression with `x` bound to the current register
-    /// value and stores the truncated integer result.
     pub fn eval_and_apply(&mut self, expr: &str) -> CalcResult<u64> {
         let mut env = Env::default();
         let current = if self.signed {
@@ -258,7 +253,6 @@ impl BitRegister {
         Ok(self.raw)
     }
 
-    /// Byte count of active bits / popcount for inspection bar.
     #[inline]
     pub fn popcount(self) -> u32 {
         self.masked().count_ones()

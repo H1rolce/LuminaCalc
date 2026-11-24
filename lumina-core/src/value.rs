@@ -1,11 +1,6 @@
-//! Runtime value: an exact decimal magnitude in SI base units + dimension +
-//! optional display unit and notation.
-
 use crate::units::Dim;
 use rust_decimal::prelude::*;
 
-/// Preferred display unit (`km/h`, `°C`, …). `display = si / factor - offset`.
-/// Stored as atoms with exponents so `m·m` renders as `m²`.
 #[derive(Debug, Clone, PartialEq)]
 pub struct UnitHint {
     pub parts: Vec<(Box<str>, i8)>,
@@ -18,13 +13,11 @@ impl UnitHint {
         Self { parts: vec![(name.into(), 1)], factor, offset }
     }
 
-    /// `self^n` (offset dropped).
     pub fn powi(&self, n: i8, factor: Decimal) -> Self {
         let parts = self.parts.iter().map(|(a, e)| (a.clone(), e.saturating_mul(n))).filter(|p| p.1 != 0).collect();
         Self { parts, factor, offset: Decimal::ZERO }
     }
 
-    /// `self · other^sign` (sign = 1 for product, -1 for quotient).
     pub fn merge(&self, other: &UnitHint, sign: i8, factor: Decimal) -> Self {
         let mut parts = self.parts.clone();
         for (name, e) in &other.parts {
@@ -38,7 +31,6 @@ impl UnitHint {
         Self { parts, factor, offset: Decimal::ZERO }
     }
 
-    /// Renders `kg·m/s²`, `1/h`, `°C`.
     pub fn label(&self) -> String {
         use crate::units::superscript;
         let fmt = |filter: &dyn Fn(i8) -> bool, neg: bool| -> String {
@@ -96,7 +88,6 @@ pub enum Notation {
 }
 
 impl Notation {
-    /// Parses a conversion notation keyword (EN + RU aliases).
     pub fn parse_keyword(name: &str) -> Option<Self> {
         match name {
             "hex" | "шестн" => Some(Notation::Radix(Radix::Hex)),
@@ -111,12 +102,10 @@ impl Notation {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct Value {
-    /// Magnitude in SI base units.
     pub si: Decimal,
     pub dim: Dim,
     pub unit: Option<Box<UnitHint>>,
     pub notation: Notation,
-    /// `true` for a bare unit identifier (`km`) — enables offset units: `20 °C`.
     pub bare_unit: bool,
 }
 
@@ -131,13 +120,11 @@ impl Value {
         self.dim.is_none()
     }
 
-    /// Magnitude expressed in the display unit (if any).
     pub fn display_magnitude(&self) -> Decimal {
         let res = match &self.unit {
             Some(h) if !h.factor.is_zero() => {
                 let v = self.si.checked_div(h.factor).unwrap_or(self.si);
                 let res = v - h.offset;
-                // Collapse 28-digit repeating-fraction residue (e.g. `32 °F in °C` = 2e-26 -> 0).
                 if !h.offset.is_zero() {
                     let eps = Decimal::new(1, 22) * h.offset.abs().max(Decimal::ONE);
                     if res.abs() < eps {
@@ -159,13 +146,11 @@ impl Value {
         }
     }
 
-    /// Lossy conversion for plotting / transcendental functions.
     #[inline]
     pub fn to_f64(&self) -> f64 {
         self.si.to_f64().unwrap_or(f64::NAN)
     }
 
-    /// Formatted for display (digit grouping, rounding, unit suffix).
     pub fn display(&self, opts: &FormatOptions) -> String {
         let mag = self.display_magnitude();
         let mut s = match self.notation {
@@ -186,7 +171,6 @@ impl Value {
         s
     }
 
-    /// Machine-friendly representation for the clipboard: no grouping, `.` decimal.
     pub fn plain(&self, precision: u32) -> String {
         self.display(&FormatOptions { precision, grouping: None })
     }
@@ -194,9 +178,7 @@ impl Value {
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct FormatOptions {
-    /// Max fractional digits.
     pub precision: u32,
-    /// Thousands separator for the integer part.
     pub grouping: Option<char>,
 }
 
@@ -206,10 +188,8 @@ impl Default for FormatOptions {
     }
 }
 
-const SCI_HIGH: Decimal = Decimal::from_parts(0xA4C6_8000, 0x0003_8D7E, 0, false, 0); // 1e15
+const SCI_HIGH: Decimal = Decimal::from_parts(0xA4C6_8000, 0x0003_8D7E, 0, false, 0);
 
-/// Rounds to `precision` decimals, strips trailing zeros, groups thousands.
-/// Switches to scientific notation for very large/small magnitudes.
 pub fn format_decimal(d: Decimal, opts: &FormatOptions) -> String {
     let abs = d.abs();
     if !abs.is_zero() {
@@ -244,7 +224,6 @@ pub fn format_decimal(d: Decimal, opts: &FormatOptions) -> String {
     out
 }
 
-/// Scientific notation: `1.2345e20`.
 pub fn format_sci(d: Decimal, sig: u32) -> String {
     let f = d.to_f64().unwrap_or(0.0);
     if f == 0.0 {
@@ -260,7 +239,6 @@ pub fn format_sci(d: Decimal, sig: u32) -> String {
     }
 }
 
-/// Integer in a given radix (`0xFF`, `0b1010 1010`). `None` if not an integer.
 pub fn format_radix(d: Decimal, radix: Radix, group: bool) -> Option<String> {
     if !d.fract().is_zero() {
         return None;
@@ -295,9 +273,6 @@ pub fn group_from_right(s: &str, chunk: usize, sep: char) -> String {
     out
 }
 
-/// Approximates a non-integer `Decimal` as an irreducible rational `num / den`
-/// with `1 < den <= max_den` using continued fractions. Returns `None` for
-/// integers or irrationals that do not match within `1e-9`.
 pub fn decimal_to_fraction(d: Decimal, max_den: i64) -> Option<(i64, i64)> {
     if d.fract().is_zero() || max_den < 2 {
         return None;
@@ -346,7 +321,6 @@ pub fn decimal_to_fraction(d: Decimal, max_den: i64) -> Option<(i64, i64)> {
     }
 }
 
-/// Engineering notation with exponent as a multiple of 3: `12.345×10³`, `4.5×10⁻³`.
 pub fn format_engineering(d: Decimal, sig: u32) -> String {
     let f = d.to_f64().unwrap_or(0.0);
     if f == 0.0 || !f.is_finite() {
@@ -412,7 +386,6 @@ mod tests {
 
     #[test]
     fn fraction_and_engineering() {
-        // 1/2 + 2/3 + 3/4 = 23/12
         let v = d("1.9166666666666667");
         assert_eq!(decimal_to_fraction(v, 10_000), Some((23, 12)));
         assert_eq!(decimal_to_fraction(d("-0.75"), 10_000), Some((-3, 4)));

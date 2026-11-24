@@ -1,9 +1,3 @@
-//! Cohesive design system for LuminaCalc.
-//!
-//! Replaces default egui visuals with Dark and Light themes driven by the
-//! Windows system accent color, semantic syntax-highlighting palettes,
-//! crisp system fonts with Cyrillic + math glyph coverage, and smooth UI helpers.
-
 use crate::i18n::Lang;
 use egui::text::LayoutJob;
 use egui::{
@@ -65,7 +59,6 @@ pub struct Palette {
     pub warning: Color32,
     pub error: Color32,
 
-    // Syntax colors
     pub syn_number: Color32,
     pub syn_variable: Color32,
     pub syn_assign: Color32,
@@ -89,7 +82,6 @@ impl Palette {
         Self::from_system_theme(sys)
     }
 
-    /// Generates a cohesive Windows 11 Mica-inspired palette from the OS accent color & dark/light mode.
     pub fn from_system_theme(sys: crate::win_theme::SystemTheme) -> Self {
         let accent = crate::win_theme::tune_accent_for_mode(sys.accent, sys.dark);
         let accent_fg = if crate::win_theme::luminance(accent) > 0.52 {
@@ -104,7 +96,6 @@ impl Palette {
         };
 
         if sys.dark {
-            // Subtle Mica tint (4-6% of Windows accent mixed into neutral dark graphite surfaces)
             let tint = |base: Color32, k: f32| Self::lerp(base, sys.accent, k);
             Self {
                 dark: true,
@@ -241,7 +232,6 @@ impl Palette {
     }
 }
 
-/// Applies the LuminaCalc design system to `egui::Context`.
 pub fn apply_theme(ctx: &Context, theme: ThemeId) -> Palette {
     let p = Palette::for_theme(theme);
 
@@ -323,8 +313,6 @@ pub fn apply_theme(ctx: &Context, theme: ThemeId) -> Palette {
     p
 }
 
-/// Loads crisp system fonts with full Cyrillic + mathematical symbol support,
-/// keeping egui's bundled fonts as graceful fallbacks.
 pub fn install_fonts(ctx: &Context) {
     let mut fonts = FontDefinitions::default();
 
@@ -387,8 +375,6 @@ fn load_first(paths: &[PathBuf]) -> Option<Vec<u8>> {
     paths.iter().find_map(|p| std::fs::read(p).ok())
 }
 
-/// Appends one highlighted line into `job`, applying inline error underlining
-/// to `err_span` without popups.
 pub fn append_highlighted_line(
     job: &mut LayoutJob,
     src: &str,
@@ -411,7 +397,6 @@ pub fn append_highlighted_line(
     let err_bg = Palette::alpha(palette.error, if palette.dark { 28 } else { 22 });
     let err_range = err_span.map(|s| {
         if s.start == s.end {
-            // Point-at-end error: underline the last char if any.
             let end = s.end.min(src.len());
             let start = src[..end].char_indices().next_back().map_or(end, |(i, _)| i);
             start..end
@@ -432,7 +417,6 @@ pub fn append_highlighted_line(
             job.append(&src[range], 0.0, base_fmt(color, Stroke::NONE, Color32::TRANSPARENT));
             return;
         }
-        // Split around the error overlap so only the offending bytes are underlined.
         let ov_start = er.start.max(range.start);
         let ov_end = er.end.min(range.end);
         if range.start < ov_start {
@@ -472,7 +456,6 @@ pub fn append_highlighted_line(
     }
 }
 
-/// Builds a syntax-highlighted `LayoutJob` for the entire notebook document.
 pub fn build_notebook_layout_job(
     full_text: &str,
     lines: &[LineEntry],
@@ -507,7 +490,6 @@ pub fn build_notebook_layout_job(
             palette,
         );
 
-        // Preserve any trailing `\r` if pasted from CRLF source so LayoutJob length matches `full_text`.
         let extra_cr = line_slice_end.saturating_sub(line.byte_start + clean.len());
         if extra_cr > 0 {
             let cr_start = line.byte_start + clean.len();
@@ -523,14 +505,12 @@ pub fn build_notebook_layout_job(
         }
     }
 
-    // Safety fallback if `lines` was momentarily out of sync with `full_text`.
     if job.text.len() != full_text.len() {
         return LayoutJob::simple(full_text.to_owned(), font_id, palette.text_primary, wrap_width);
     }
     job
 }
 
-/// Builds a single-line highlighted `LayoutJob` (used by Plotter, Scientific, and Programmer inputs).
 pub fn build_singleline_highlight(
     text: &str,
     plot_mode: bool,
@@ -549,7 +529,6 @@ pub fn build_singleline_highlight(
     job
 }
 
-/// Returns a reusable single-line syntax-highlighting layouter closure for `TextEdit::layouter`.
 pub fn singleline_layouter<'a>(
     plot_mode: bool,
     err_span: Option<&'a Span>,
@@ -569,7 +548,6 @@ pub fn singleline_layouter<'a>(
     }
 }
 
-/// Paints a smooth pill badge (returns the painted rect).
 pub fn paint_pill(
     ui: &mut egui::Ui,
     text: &str,
@@ -594,7 +572,6 @@ pub fn paint_pill(
     resp
 }
 
-/// Draws a subtle separator hairline.
 pub fn hairline_h(ui: &mut egui::Ui, color: Color32) {
     let rect = ui.available_rect_before_wrap();
     let y = rect.top();
@@ -605,7 +582,6 @@ pub fn hairline_h(ui: &mut egui::Ui, color: Color32) {
     ui.add_space(1.0);
 }
 
-/// Draws a crisp vertical hairline inside `rect`.
 pub fn hairline_v(painter: &egui::Painter, rect: Rect, x: f32, color: Color32) {
     painter.line_segment(
         [Pos2::new(x, rect.top()), Pos2::new(x, rect.bottom())],

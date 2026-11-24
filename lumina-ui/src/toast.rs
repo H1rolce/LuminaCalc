@@ -1,6 +1,3 @@
-//! Lightweight animated toast notifications painted on the foreground layer.
-//! Zero allocations or repaints when no toast is active.
-
 use crate::style::Palette;
 use egui::{Color32, Context, CornerRadius, FontId, Id, LayerId, Order, Pos2, Rect, Stroke, Vec2};
 use std::time::Instant;
@@ -42,7 +39,6 @@ impl ToastManager {
         self.show(text, ToastKind::Info);
     }
 
-    /// Renders the active toast with smooth ease-out slide-up and fade.
     pub fn paint(&mut self, ctx: &Context, palette: &Palette) {
         let Some(item) = &self.active else {
             return;
@@ -58,7 +54,6 @@ impl ToastManager {
             return;
         }
 
-        // Request high-FPS repaints only during fade-in/fade-out; sleep during steady hold.
         if elapsed < fade_in || elapsed > total - fade_out {
             ctx.request_repaint();
         } else {
@@ -103,7 +98,6 @@ impl ToastManager {
         let center = Pos2::new(viewport.center().x, viewport.bottom() - 44.0 + slide);
         let rect = Rect::from_center_size(center, size);
 
-        // Soft drop shadow
         let shadow_rect = rect.translate(Vec2::new(0.0, 4.0)).expand(2.0);
         painter.rect_filled(
             shadow_rect,
@@ -111,12 +105,10 @@ impl ToastManager {
             Color32::from_black_alpha((70.0 * alpha) as u8),
         );
 
-        // Toast pill surface
         let bg = Palette::alpha(palette.bg_elevated, (242.0 * alpha) as u8);
         let stroke = Stroke::new(1.0, Palette::alpha(accent, (165.0 * alpha) as u8));
         painter.rect(rect, CornerRadius::same(10), bg, stroke, egui::StrokeKind::Inside);
 
-        // Status indicator dot
         let dot_pos = Pos2::new(rect.left() + pad.x + 3.0, rect.center().y);
         painter.circle_filled(dot_pos, 3.8, Palette::alpha(accent, (255.0 * alpha) as u8));
 

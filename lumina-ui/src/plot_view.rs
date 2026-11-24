@@ -1,13 +1,3 @@
-//! Interactive 2D function plotter built on `egui_plot`.
-//!
-//! Features:
-//! - Multiple curves with syntax-highlighted equation inputs & inline errors
-//! - Auto-generated parameter sliders (`y = a * sin(b * x)`) with editable range
-//!   and smooth 240 FPS play/pause animation
-//! - Dirty-flagged curve & snap-point caching (zero allocation on steady frames)
-//! - Magnetic cursor snapping to roots, intersections, extrema, and Y-intercepts
-//!   with one-click coordinate copy
-
 use crate::i18n::{Lang, Strings, format_error, tr};
 use crate::state::{SavedPlotCurve, SavedPlotParam};
 use crate::style::{self, Palette};
@@ -77,7 +67,6 @@ pub struct PlotView {
     version: u64,
     cache: Option<PlotCache>,
     reset_requested: bool,
-    /// Last known bounds used to keep curves sampled cleanly across frames.
     last_bounds: [f64; 4],
 }
 
@@ -182,7 +171,6 @@ impl PlotView {
         self.version = self.version.wrapping_add(1).max(1);
     }
 
-    /// Synchronizes auto-generated parameter sliders with all currently compiled curves.
     fn sync_params(&mut self) {
         for p in &self.params {
             self.param_memory.insert(p.name.to_string(), (p.value, p.min, p.max));
@@ -263,7 +251,6 @@ impl PlotView {
         }
 
         let mut snaps = find_snap_points(&active_compiled, x_min, x_max, y_min, y_max, 360, &params);
-        // Remap curve indices back to `self.curves` indices.
         for sp in &mut snaps {
             if let Some(&orig) = active_indices.get(sp.curve_a) {
                 sp.curve_a = orig;
@@ -318,7 +305,6 @@ impl PlotView {
         }
     }
 
-    /// Renders the plotter sidebar + interactive canvas. Returns `(action, state_changed)`.
     pub fn show(
         &mut self,
         ui: &mut Ui,
@@ -376,7 +362,6 @@ impl PlotView {
                     style::hairline_h(ui, palette.border_subtle);
                     ui.add_space(8.0);
 
-                    // Plot toolbar controls (Snap toggle + Reset View)
                     ui.horizontal(|ui| {
                         let snap_resp = ui.checkbox(&mut self.snap_enabled, s.plot_snap_toggle);
                         if snap_resp.changed() {
@@ -455,7 +440,6 @@ impl PlotView {
                 .inner_margin(Margin::symmetric(8, 7))
                 .show(ui, |ui| {
                     ui.horizontal(|ui| {
-                        // Visibility toggle dot
                         let (dot_r, dot_resp) =
                             ui.allocate_exact_size(Vec2::splat(18.0), Sense::click());
                         if self.curves[i].visible {
@@ -473,7 +457,6 @@ impl PlotView {
                             dirty_state = true;
                         }
 
-                        // Syntax-highlighted equation input
                         let err_span_opt = err_info.as_ref().map(|e| e.span.clone());
                         let mut layouter =
                             style::singleline_layouter(true, err_span_opt.as_ref(), 14.0, palette);
@@ -494,7 +477,6 @@ impl PlotView {
                             dirty_state = true;
                         }
 
-                        // Delete curve button (keep at least 1 curve)
                         if self.curves.len() > 1 {
                             let (del_r, del_resp) =
                                 ui.allocate_exact_size(Vec2::splat(18.0), Sense::click());
@@ -680,7 +662,6 @@ impl PlotView {
     ) -> PlotAction {
         let mut action = PlotAction::None;
 
-        // Pre-populate cache using last known bounds so `PlotPoints::Borrowed` works with zero copies.
         let [bx0, bx1, by0, by1] = self.last_bounds;
         self.ensure_cache(bx0, bx1, by0, by1);
 
@@ -713,20 +694,17 @@ impl PlotView {
             }
 
             let resp = plot.show(ui, |plot_ui| {
-                // Capture actual bounds; if bounds changed, we'll update next frame seamlessly.
                 let b = plot_ui.plot_bounds();
                 let b_arr = [b.min()[0], b.max()[0], b.min()[1], b.max()[1]];
                 if b_arr != self.last_bounds {
                     new_bounds = Some(b_arr);
                 }
 
-                // Crisp primary coordinate axes
                 let axis_col = Palette::alpha(palette.text_muted, 115);
                 plot_ui.hline(HLine::new("x-axis", 0.0).color(axis_col).width(1.2));
                 plot_ui.vline(VLine::new("y-axis", 0.0).color(axis_col).width(1.2));
 
                 if let Some(cache) = &self.cache {
-                    // Draw sampled curves with zero heap copy (`PlotPoints::Borrowed`).
                     for sc in &cache.curves {
                         let col = palette.plot_colors[sc.color_idx % palette.plot_colors.len()];
                         for (seg_idx, seg) in sc.segments.iter().enumerate() {
@@ -743,7 +721,6 @@ impl PlotView {
                         }
                     }
 
-                    // Draw subtle markers for roots, intersections, and extrema.
                     if snap_enabled {
                         if !cache.snap_points_root.is_empty() {
                             plot_ui.points(
@@ -774,7 +751,6 @@ impl PlotView {
                         }
                     }
 
-                    // Magnetic cursor snapping in screen pixels!
                     if let Some(ptr_plot) = plot_ui.pointer_coordinate() {
                         let transform = plot_ui.transform();
                         let ptr_screen = transform.position_from_point(&ptr_plot);
@@ -791,7 +767,6 @@ impl PlotView {
                             }
                         }
 
-                        // If not snapped to a special point, snap softly to nearest curve at cursor X.
                         if hovered_snap.is_none() {
                             let mut best_dy = 22.0f32;
                             for c in &self.curves {
@@ -825,7 +800,6 @@ impl PlotView {
             ui.ctx().request_repaint();
         }
 
-        // Paint crisp snap / trace overlay card above the plot canvas.
         let overlay = ui.painter().with_clip_rect(canvas_rect);
         if let Some((sp, screen_pos)) = hovered_snap {
             let accent = match sp.kind {
@@ -840,7 +814,6 @@ impl PlotView {
                 SnapKind::Extremum => s.plot_snap_extremum,
             };
 
-            // Glowing halo + core dot
             overlay.circle_filled(screen_pos, 11.0, Palette::alpha(accent, 55));
             overlay.circle_filled(screen_pos, 5.5, accent);
             overlay.circle_stroke(screen_pos, 5.5, Stroke::new(1.6, palette.bg_base));

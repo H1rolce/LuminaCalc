@@ -1,5 +1,3 @@
-//! Localization (Russian & English) with system-locale autodetection.
-
 use lumina_core::ErrorKind;
 use serde::{Deserialize, Serialize};
 
@@ -43,7 +41,6 @@ pub struct Strings {
     pub pin_tooltip: &'static str,
     pub hotkey_hint: &'static str,
 
-    // Notebook
     pub nb_placeholder: &'static str,
     pub nb_vars_label: &'static str,
     pub nb_no_vars: &'static str,
@@ -58,7 +55,6 @@ pub struct Strings {
     pub nb_copied: &'static str,
     pub nb_default_doc: &'static str,
 
-    // Plotter
     pub plot_functions: &'static str,
     pub plot_add_fn: &'static str,
     pub plot_params: &'static str,
@@ -72,7 +68,6 @@ pub struct Strings {
     pub plot_click_copy_coords: &'static str,
     pub plot_expr_hint: &'static str,
 
-    // Programmer & Engineering
     pub prog_expr_label: &'static str,
     pub prog_expr_hint: &'static str,
     pub prog_apply: &'static str,
@@ -86,7 +81,6 @@ pub struct Strings {
     pub prog_conv_value: &'static str,
     pub prog_send_notebook: &'static str,
 
-    // Scientific
     pub sci_history: &'static str,
     pub sci_history_empty: &'static str,
 }
@@ -255,7 +249,6 @@ pub fn tr(lang: Lang) -> &'static Strings {
     }
 }
 
-/// Formats a core [`ErrorKind`] in the selected UI language.
 pub fn format_error(lang: Lang, kind: &ErrorKind) -> String {
     match lang {
         Lang::En => kind.to_string(),

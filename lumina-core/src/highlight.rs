@@ -1,6 +1,3 @@
-//! Semantic syntax-highlighting classification over lexer tokens.
-//! Pure data (byte ranges + token categories) so `lumina-core` stays UI-agnostic.
-
 use crate::error::Span;
 use crate::eval;
 use crate::lexer::{Kw, Tok, Token};
@@ -30,7 +27,6 @@ pub struct HighlightSpan {
     pub kind: HighlightKind,
 }
 
-/// Classifies every token on a line using the variables visible before this line.
 pub fn classify(
     tokens: &[Token<'_>],
     defined_vars: &HashSet<Box<str>>,

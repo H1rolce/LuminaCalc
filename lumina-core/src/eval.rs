@@ -1,7 +1,3 @@
-//! Exact evaluator. Arithmetic is done in `rust_decimal` (no `0.1 + 0.2`
-//! artifacts); transcendental functions fall back to `f64` and are rounded to
-//! 15 significant digits to hide binary noise.
-
 use crate::error::{CalcError, CalcResult, ErrorKind, Span};
 use crate::parser::{BinOp, Expr, ExprKind, PostOp, Target, UnOp};
 use crate::units::{self, Dim};
@@ -10,7 +6,6 @@ use rust_decimal::MathematicalOps;
 use rust_decimal::prelude::*;
 use std::collections::HashMap;
 
-/// Angle mode used by trigonometric functions when no explicit unit (`deg`/`rad`) is attached.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum AngleUnit {
     #[default]
@@ -75,17 +70,12 @@ impl AngleUnit {
     }
 }
 
-/// Variables and notebook context visible to an expression.
 #[derive(Debug, Default, Clone)]
 pub struct Env {
     pub vars: HashMap<Box<str>, Value>,
-    /// Values of previous document lines, index = line number - 1.
     pub lines: Vec<Option<Value>>,
-    /// Values of the current block (since the last empty line) for `sum`/`avg`.
     pub block: Vec<Value>,
-    /// Last successful result for `ans`.
     pub prev: Option<Value>,
-    /// Angle unit for bare trigonometric arguments (defaults to radians).
     pub angle_unit: AngleUnit,
 }
 
@@ -115,7 +105,6 @@ pub fn constant(name: &str) -> Option<Decimal> {
     }
 }
 
-/// Canonical function name for any alias (EN + RU).
 pub fn function(name: &str) -> Option<&'static str> {
     Some(match name {
         "sqrt" | "корень" => "sqrt",
@@ -166,13 +155,11 @@ fn mismatch(a: &Value, b: &Value, span: &Span) -> CalcError {
     CalcError::new(ErrorKind::DimensionMismatch(label(a), label(b)), span.clone())
 }
 
-/// Strips the sign bit from negative zero so `-0` never leaks into values or UI.
 #[inline]
 fn normalize_zero(d: Decimal) -> Decimal {
     if d.is_zero() { Decimal::ZERO } else { d }
 }
 
-/// Converts an `f64` result back to `Decimal`, rounding away IEEE 754 binary noise.
 fn from_f64(x: f64, span: &Span) -> CalcResult<Decimal> {
     if x.is_nan() {
         return err(ErrorKind::Domain, span);
@@ -187,7 +174,6 @@ fn from_f64(x: f64, span: &Span) -> CalcResult<Decimal> {
     Ok(normalize_zero(d.round_sf(15).unwrap_or(d).normalize()))
 }
 
-/// Like [`from_f64`], additionally snapping tiny trigonometric rounding residues (`< 1e-14`) to `0`.
 fn trig_from_f64(x: f64, span: &Span) -> CalcResult<Decimal> {
     if x.is_finite() && x.abs() < 1e-14 {
         return Ok(Decimal::ZERO);
@@ -195,9 +181,6 @@ fn trig_from_f64(x: f64, span: &Span) -> CalcResult<Decimal> {
     from_f64(x, span)
 }
 
-/// Evaluates `sin`, `cos`, `tan`, or `cot` with exact modular reduction in `Deg`/`Grad`,
-/// clean pole detection (`tan(90°)` / `tan(π/2)` / `cot(180°)` → [`ErrorKind::Domain`]),
-/// and zero IEEE 754 drift at cardinal angles.
 fn eval_trig(canon: &str, v: &Value, angle_unit: AngleUnit, span: &Span) -> CalcResult<Decimal> {
     if v.unit.is_none() {
         match angle_unit {
@@ -311,7 +294,6 @@ fn merge_notation(a: Notation, b: Notation) -> Notation {
     if a != Notation::Auto { a } else { b }
 }
 
-/// Integer power by squaring with overflow checks.
 fn powi_exact(base: Decimal, exp: i64, span: &Span) -> CalcResult<Decimal> {
     let overflow = || CalcError::new(ErrorKind::Overflow, span.clone());
     let mut result = Decimal::ONE;
@@ -383,7 +365,6 @@ pub fn eval(e: &Expr, env: &Env) -> CalcResult<Value> {
                     if n < 0 {
                         return err(ErrorKind::Domain, span);
                     }
-                    // 27! ≈ 1.09e28 fits exactly in 96-bit Decimal; 28! overflows Decimal::MAX.
                     if n > 27 {
                         return err(ErrorKind::Overflow, span);
                     }
@@ -483,7 +464,6 @@ fn ident(name: &str, span: &Span, env: &Env) -> CalcResult<Value> {
 
 fn binary(op: BinOp, a: &Expr, b: &Expr, span: &Span, env: &Env) -> CalcResult<Value> {
     let lhs = eval(a, env)?;
-    // `x + 10%` → x · 1.1
     if matches!(op, BinOp::Add | BinOp::Sub)
         && let ExprKind::Postfix(PostOp::Percent, inner) = &b.kind
     {
@@ -527,7 +507,6 @@ pub fn apply_binary(op: BinOp, lhs: Value, rhs: Value, span: &Span, rhs_span: &S
             Ok(Value { si, dim: lhs.dim, unit, notation, bare_unit: false })
         }
         BinOp::Mul | BinOp::ImplicitMul => {
-            // `20 °C`: a plain number times a bare offset unit applies the offset.
             if rhs.bare_unit
                 && lhs.unit.is_none()
                 && lhs.is_dimensionless()
@@ -595,11 +574,9 @@ pub fn apply_binary(op: BinOp, lhs: Value, rhs: Value, span: &Span, rhs_span: &S
     }
 }
 
-/// Derives a display unit for products/quotients.
 fn combine_units(lhs: &Value, rhs: &Value, dim: Dim, sep: char) -> Option<Box<UnitHint>> {
     let sign: i8 = if sep == '/' { -1 } else { 1 };
     match (&lhs.unit, &rhs.unit) {
-        // dimensionless scalar keeps the other side's unit: `2 * 5 km`, `30 deg`
         (Some(h), None) if rhs.is_dimensionless() => Some(Box::new(h.powi(1, h.factor))),
         (None, Some(h)) if lhs.is_dimensionless() && sign == 1 => Some(Box::new(h.powi(1, h.factor))),
         (None, Some(h)) if lhs.is_dimensionless() => {
@@ -652,7 +629,6 @@ fn arity(name: &str, expected: &'static str, got: usize, span: &Span) -> CalcErr
 
 fn call(name: &str, name_span: &Span, args: &[Expr], span: &Span, env: &Env) -> CalcResult<Value> {
     let Some(canon) = function(name).filter(|_| !env.vars.contains_key(name)) else {
-        // `a(b + 1)` with a variable/unit/constant/special (`Ans(2+3)`) → implicit multiplication
         if args.len() == 1
             && (env.vars.contains_key(name)
                 || units::is_unit(name)
@@ -670,7 +646,6 @@ fn call(name: &str, name_span: &Span, args: &[Expr], span: &Span, env: &Env) -> 
     let one = || -> CalcResult<&Value> {
         if vals.len() == 1 { Ok(&vals[0]) } else { Err(arity(name, "1", vals.len(), name_span)) }
     };
-    // Unit-preserving magnitude operations act on the displayed magnitude.
     let map_mag = |v: &Value, f: &dyn Fn(Decimal) -> Decimal| -> CalcResult<Value> {
         let mut out = v.clone();
         out.bare_unit = false;
@@ -861,7 +836,6 @@ fn gcd(mut a: u128, mut b: u128) -> u128 {
     a
 }
 
-/// Convenience: lex + parse + evaluate a standalone expression.
 pub fn eval_str(src: &str, env: &Env) -> CalcResult<Value> {
     let toks = crate::lexer::lex(src);
     let expr = crate::parser::parse_expr(&toks, src.len())?;
@@ -1048,13 +1022,11 @@ mod tests {
 
     #[test]
     fn classwiz_precedence_trig_zero_and_errors() {
-        // Right-associative power & unary minus below power
         assert_eq!(show("2^3^2"), "512");
         assert_eq!(show("-2^2"), "-4");
         assert_eq!(show("(-2)^2"), "4");
         assert_eq!(show("0.1 + 0.2"), "0.3");
 
-        // Implicit multiplication including `2(3+4)`, `(2+3)(4+5)`, `(2+3)2`, `2pi`, `3sin(30)`, `2Ans`, `Ans(2+3)`, `1/2pi`
         assert_eq!(show("2(3+4)"), "14");
         assert_eq!(show("(2+3)(4+5)"), "45");
         assert_eq!(show("(2+3)2"), "10");
@@ -1067,11 +1039,9 @@ mod tests {
         assert_eq!(eval_str("3sin(30)", &deg_env).expect("ok").plain(10), "1.5");
         assert_eq!(eval_str("2Ans", &deg_env).expect("ok").plain(10), "10");
         assert_eq!(eval_str("Ans(2+3)", &deg_env).expect("ok").plain(10), "25");
-        // `1/2pi` == `1 / (2 * pi)` (Casio ClassWiz implicit-mul priority)
         let inv_2pi = eval_str("1/2pi", &Env::default()).expect("ok").to_f64();
         assert!((inv_2pi - 1.0 / (2.0 * std::f64::consts::PI)).abs() < 1e-12);
 
-        // Exact trig in Deg / Rad / Grad & no `-0`
         assert_eq!(eval_str("sin(180)", &deg_env).expect("ok").plain(10), "0");
         assert_eq!(eval_str("cos(90)", &deg_env).expect("ok").plain(10), "0");
         assert_eq!(eval_str("sin(3600000)", &deg_env).expect("ok").plain(10), "0");
@@ -1083,7 +1053,6 @@ mod tests {
         assert_eq!(eval_str("cot(180)", &deg_env).expect_err("pole").kind, ErrorKind::Domain);
         assert_eq!(kind("tan(pi / 2)"), ErrorKind::Domain);
 
-        // Inverse trig across angle modes
         assert_eq!(eval_str("asin(0.5)", &deg_env).expect("ok").plain(10), "30");
         assert_eq!(eval_str("acos(0.5)", &deg_env).expect("ok").plain(10), "60");
         assert_eq!(eval_str("atan(1)", &deg_env).expect("ok").plain(10), "45");
@@ -1091,19 +1060,16 @@ mod tests {
         assert_eq!(eval_str("atan(1)", &deg_env).expect("ok").plain(10), "50");
         assert_eq!(eval_str("tan(100)", &deg_env).expect_err("pole").kind, ErrorKind::Domain);
 
-        // Factorial domain & overflow
         assert_eq!(kind("(-3)!"), ErrorKind::Domain);
         assert_eq!(kind("2.5!"), ErrorKind::ExpectedInteger);
         assert_eq!(kind("28!"), ErrorKind::Overflow);
 
-        // Error categories: SyntaxError vs MathError
         assert!(kind("1 / 0").is_math());
         assert!(kind("ln(-1)").is_math());
         assert!(kind("asin(2)").is_math());
         assert!(kind("(1 + 2").is_syntax());
         assert!(kind("1 + ").is_syntax());
 
-        // Very small non-trig numbers must NOT be zeroed out
         let tiny = eval_str("exp(-40)", &Env::default()).expect("ok");
         assert!(!tiny.si.is_zero());
     }

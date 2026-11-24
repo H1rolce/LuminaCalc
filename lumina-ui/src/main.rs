@@ -1,5 +1,3 @@
-//! LuminaCalc desktop application entry point.
-
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod app;
@@ -17,7 +15,6 @@ mod win_theme;
 
 use app::LuminaApp;
 
-/// Embedded 256×256 PNG application icon (window, taskbar, Alt+Tab).
 const APP_ICON_PNG: &[u8] = include_bytes!("../assets/icon.png");
 
 fn main() -> eframe::Result {

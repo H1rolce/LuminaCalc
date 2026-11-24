@@ -1,7 +1,3 @@
-//! Zero-copy lexer built on `winnow`. Tokens borrow from the source line and
-//! carry byte spans, which feed both the parser and the syntax highlighter.
-//! The lexer never fails: unknown characters become [`Tok::Unknown`].
-
 use crate::error::Span;
 use crate::value::Radix;
 use winnow::Result as WResult;
@@ -29,13 +25,9 @@ pub enum Op {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Kw {
-    /// `in`, `to`, `as`, `в`, `->`, `→`
     In,
-    /// `mod`
     Mod,
-    /// `of`, `от`
     Of,
-    /// `xor`
     Xor,
 }
 
@@ -178,14 +170,11 @@ fn token<'s>(i: &mut &'s str) -> WResult<Tok<'s>> {
     alt((number, ident, line_ref, operator)).parse_next(i)
 }
 
-/// Returns `true` if `s` begins with a `#` comment/heading (and not a `#123` line reference).
 #[inline]
 pub fn is_hash_comment(s: &str) -> bool {
     s.starts_with('#') && !s[1..].starts_with(|c: char| c.is_ascii_digit())
 }
 
-/// Tokenizes one line. Whitespace is skipped; `//` and `# text` start a comment
-/// that spans to the end of the line.
 pub fn lex(src: &str) -> Vec<Token<'_>> {
     let mut out = Vec::with_capacity(src.len() / 2 + 1);
     let mut rest = src;
@@ -228,7 +217,6 @@ mod tests {
         assert_eq!(toks("0xFF"), vec![Tok::Number { text: "FF", radix: Radix::Hex }]);
         assert_eq!(toks("0b1010"), vec![Tok::Number { text: "1010", radix: Radix::Bin }]);
         assert_eq!(toks("0o17"), vec![Tok::Number { text: "17", radix: Radix::Oct }]);
-        // `2e` is 2 * e, not a broken exponent
         assert_eq!(toks("2e"), vec![Tok::Number { text: "2", radix: Radix::Dec }, Tok::Ident("e")]);
     }
 

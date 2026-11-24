@@ -1,68 +1,70 @@
 # LuminaCalc
 
-**LuminaCalc** — быстрый нативный десктопный калькулятор на Rust (`egui` / `eframe`), объединяющий 4 режима работы в одном легковесном окне с адаптацией под системный акцент Windows 11 (Dark / Light) и двуязычным интерфейсом (RU / EN).
+**English** | [Русский](README.ru.md)
 
-> Лицензия: **MIT** (см. [LICENSE](LICENSE))
+**LuminaCalc** is a fast, native desktop calculator built in Rust (`egui` / `eframe`) combining four calculation modes in a single lightweight window, with automatic Windows 11 system accent theming (Dark / Light) and bilingual UI (EN / RU).
 
----
-
-## Возможности
-
-- **Блокнот (Soulver / Numi style)** — многострочные реактивные расчёты с переменными, ссылками на строки (`#1`, `#2`), блочными агрегатами (`sum`/`сумма`, `avg`/`среднее`), конвертацией физических единиц (`120 км/ч в м/с`, `22 °C в °F`) и форматов (`255 в hex`).
-- **Инженерный калькулятор (Casio ClassWiz / fx-991ES PLUS style)** — интерактивный 2D Natural-V.P.A.M. дисплей с многоэтажными дробями, вводом скобок внутри дробей (`((2+5)*2)/(3)`), курсорным редактированием кликом мыши, `SHIFT`, `HYP`, `DEG/RAD/GRAD`, `S⇔D`, `a b/c`, `ENG`, `CONST`, памятью (`MC/MR/M-/M+/STO`), цепочкой `Ans`, автозакрытием скобок на `=`, умным `DEL` и сохраняемой историей.
-- **Графики (2D Plotter)** — построение нескольких функций на `egui_plot`, автогенерация слайдеров свободных параметров (`y = a * sin(b * x)`) с плавной анимацией, разрыв асимптот (`1/x`, `tan(x)`) и магнитное прилипание курсора к корням, экстремумам, пересечениям с осью Y и между кривыми.
-- **Программист + Конвертер единиц** — 64/32/16/8-битный регистр (`HEX`/`DEC`/`OCT`/`BIN`, знаковый/беззнаковый, побитовые операции, кликабельная/перетаскиваемая 64-битная сетка) и инженерный конвертер величин.
-- **Системная интеграция** — чтение акцентного цвета Windows из реестра (`DWM\AccentColor`), автосохранение состояния в TOML, глобальная горячая клавиша вызова (`Ctrl+Alt+Space`), режим «поверх всех окон», встроенная многоразмерная иконка `.exe` и панели задач.
+> License: **MIT** (see [LICENSE](LICENSE))
 
 ---
 
-## Архитектура проекта
+## Features
 
-Проект организован как **Cargo Workspace** из двух строго разделённых крейтов:
+- **Notebook (Soulver / Numi style)** — reactive multi-line calculations with variables, line references (`#1`, `#2`), block aggregates (`sum`, `avg`), physical unit conversions (`120 km/h in m/s`, `22 °C in °F`), and radix/scientific conversions (`255 in hex`).
+- **Scientific Calculator (Casio ClassWiz / fx-991ES PLUS style)** — interactive 2D Natural-V.P.A.M. display with multi-story fractions, balanced parentheses inside fractions (`((2+5)*2)/(3)`), mouse-clickable caret positioning, `SHIFT`, `HYP`, `DEG/RAD/GRAD`, `S⇔D`, `a b/c`, `ENG`, `CONST`, memory (`MC/MR/M-/M+/STO`), `Ans` chaining after `=`, automatic parenthesis closing, smart multi-token `DEL`, and persistent calculation history.
+- **2D Function Plotter** — multi-curve plotting on `egui_plot`, auto-generated parameter sliders (`y = a * sin(b * x)`) with smooth animation, discontinuity/asymptote splitting (`1/x`, `tan(x)`), and magnetic cursor snapping to roots, extrema, Y-intercepts, and curve intersections.
+- **Programmer & Unit Converter** — 64/32/16/8-bit register (`HEX`/`DEC`/`OCT`/`BIN`, signed/unsigned, bitwise ops, clickable & drag-paintable 64-bit grid) plus an engineering unit converter.
+- **Desktop Integration** — live Windows accent color reading from the registry (`DWM\AccentColor`), debounced TOML state persistence, global summon hotkey (`Ctrl+Alt+Space`), always-on-top mode, and embedded multi-resolution `.exe` & taskbar icon.
+
+---
+
+## Architecture
+
+The project is structured as a **Cargo Workspace** with strict separation between the headless math engine and the GUI layer:
 
 ```text
 LuminaCalc/
-├── Cargo.toml                  # Workspace + release-профиль (-O3, LTO fat, strip)
-├── LICENSE                     # Лицензия MIT
-├── lumina-core/                # Чистое математическое ядро (0 GUI-зависимостей)
+├── Cargo.toml                  # Workspace + release profile (-O3, fat LTO, strip)
+├── LICENSE                     # MIT License
+├── lumina-core/                # Headless calculation engine (zero GUI dependencies)
 │   ├── src/
-│   │   ├── lib.rs              # Публичный фасад ядра
+│   │   ├── lib.rs              # Public core facade
 │   │   ├── error.rs            # CalcError, ErrorKind, ErrorCategory (Syntax vs Math), Span
-│   │   ├── lexer.rs            # Zero-copy лексер на winnow (EN/RU, 0x/0b/0o, °, ², ³, #ref)
-│   │   ├── parser.rs           # Precedence-climbing парсер, неявное умножение, auto_close_parens
-│   │   ├── eval.rs             # Точный вычислитель на Decimal + модульная тригонометрия
-│   │   ├── units.rs            # Размерностный анализ (8D-вектор: 7 SI + Info) и таблица единиц
-│   │   ├── value.rs            # Value, UnitHint, форматирование (Decimal/Sci/Radix/Eng/Fraction)
-│   │   ├── highlight.rs        # Семантическая классификация токенов для подсветки синтаксиса
-│   │   ├── notebook.rs         # Реактивный движок блокнота с кэшированием AST по строкам
-│   │   ├── plot.rs             # Быстрый f64-вычислитель, семплирование кривых, поиск корней/пересечений
-│   │   └── programmer.rs       # BitRegister (8/16/32/64-bit, signed/unsigned, сдвиги, повороты)
+│   │   ├── lexer.rs            # Zero-copy winnow lexer (EN/RU, 0x/0b/0o, °, ², ³, #ref)
+│   │   ├── parser.rs           # Precedence-climbing parser, implicit mul, auto_close_parens
+│   │   ├── eval.rs             # Exact Decimal evaluator + modular trigonometry
+│   │   ├── units.rs            # Dimensional analysis (8D vector: 7 SI + Info) & unit table
+│   │   ├── value.rs            # Value, UnitHint, formatters (Decimal/Sci/Radix/Eng/Fraction)
+│   │   ├── highlight.rs        # Semantic token classification for syntax highlighting
+│   │   ├── notebook.rs         # Reactive notebook engine with per-line AST caching
+│   │   ├── plot.rs             # Fast f64 evaluator, curve sampler, root/intersection solvers
+│   │   └── programmer.rs       # BitRegister (8/16/32/64-bit, signed/unsigned, shifts/rotates)
 │   └── tests/
-│       └── integration.rs      # Интеграционные тесты ядра
-└── lumina-ui/                  # Десктопный интерфейс на eframe / egui
-    ├── build.rs                # Встраивание многоразмерной icon.ico в PE-ресурсы Windows
+│       └── integration.rs      # End-to-end core integration tests
+└── lumina-ui/                  # Desktop UI built on eframe / egui
+    ├── build.rs                # Embeds multi-resolution icon.ico into Windows PE resources
     ├── assets/                 # icon.png (256x256), icon.ico (16..256px), icon.rc
     └── src/
-        ├── main.rs             # Точка входа eframe, окно без рамок, иконка окна/панели задач
-        ├── app.rs              # Корневое состояние, хоткеи, буфер обмена, дебаунс сохранения TOML
-        ├── state.rs            # Сериализация/десериализация AppState в state.toml
-        ├── style.rs            # Дизайн-система, генерация палитр Dark/Light, шрифты, подсветка LayoutJob
-        ├── win_theme.rs        # Чтение системной темы и AccentColor из реестра Windows (advapi32)
-        ├── titlebar.rs         # Кастомная шапка окна, пропорциональные вкладки, 8-сторонний ресайз
-        ├── toast.rs            # Лёгкие всплывающие уведомления поверх UI
-        ├── i18n.rs             # Локализация RU / EN и перевод ErrorKind
-        ├── notebook_view.rs    # Двухколоночный редактор блокнота с кэшем LayoutJob и результатов
-        ├── sci_view.rs         # Инженерный калькулятор (6-колоночная сетка, CONST, Ans, smart DEL)
-        ├── math_display.rs     # Интерактивный 2D Natural-V.P.A.M. парсер, рендер и hit-testing
-        ├── plot_view.rs        # Интерфейс плоттера, слайдеры параметров, кэш PlotPoints::Borrowed
-        └── prog_view.rs        # Битовая сетка программиста и кэшируемый конвертер единиц
+        ├── main.rs             # eframe entry point, frameless viewport, window/taskbar icon
+        ├── app.rs              # Root state, shortcuts, clipboard, debounced TOML persistence
+        ├── state.rs            # AppState serialization/deserialization (state.toml)
+        ├── style.rs            # Design system, Dark/Light palettes, fonts, LayoutJob highlighter
+        ├── win_theme.rs        # Windows registry reader for system theme & AccentColor
+        ├── titlebar.rs         # Custom titlebar, proportional tabs, 8-way frameless resize
+        ├── toast.rs            # Lightweight foreground toast notifications
+        ├── i18n.rs             # EN / RU localization & ErrorKind formatting
+        ├── notebook_view.rs    # Two-column notebook view with LayoutJob & result caching
+        ├── sci_view.rs         # Scientific calculator (6-column grid, CONST, Ans, smart DEL)
+        ├── math_display.rs     # Interactive 2D Natural-V.P.A.M. parser, renderer & hit-tester
+        ├── plot_view.rs        # Plotter UI, parameter sliders, PlotPoints::Borrowed cache
+        └── prog_view.rs        # Interactive bit grid & cached engineering unit converter
 ```
 
-### Поток данных и разделение ответственности
+### Data Flow
 
 ```mermaid
 flowchart LR
-    UI["lumina-ui (egui / eframe)"] -->|строка / события| Core["lumina-core (pure Rust)"]
+    UI["lumina-ui (egui / eframe)"] -->|expression / events| Core["lumina-core (pure Rust)"]
     subgraph Core
         Lexer["lexer.rs (winnow)"] --> Parser["parser.rs (AST)"]
         Lexer --> HL["highlight.rs (HighlightSpan)"]
@@ -71,75 +73,75 @@ flowchart LR
         Eval --> Units["units.rs (8D Dim)"]
         Eval --> Val["value.rs (Format / Fraction)"]
     end
-    HL -->|цветовые спаны| UI
+    HL -->|syntax spans| UI
     Val -->|Value / CalcError| UI
-    Plot -->|сегменты + SnapPoint| UI
+    Plot -->|segments + SnapPoint| UI
 ```
 
 ---
 
-## Ключевые архитектурные решения
+## Key Technical Highlights
 
-### 1. Точная арифметика и тригонометрия (`lumina-core`)
-- Базовые вычисления выполняются в 96-битном `rust_decimal::Decimal`, полностью исключая артефакты IEEE 754 (`0.1 + 0.2 = 0.3`).
-- Трансцендентные функции используют `f64` с округлением до 15 значащих цифр, при этом тригонометрия в `Deg` и `Grad` предварительно приводится по модулю `360` / `400` в `Decimal` — `sin(180°)` и `cos(90°)` равны ровно `0`, а полюсы `tan(90°)`, `tan(π/2)`, `cot(180°)` возвращают `ErrorKind::Domain` (`Math ERROR`).
-- Отрицательный ноль (`-0`) нормализуется на уровне `Decimal` и форматирования.
-- Все ошибки несут байтовый `Span` и делятся через `ErrorCategory::{Syntax, Math}` — никаких `.unwrap()` / `.expect()` на пользовательском вводе и никаких `NaN`/`Infinity` в UI.
+### 1. Exact Arithmetic & Trigonometry (`lumina-core`)
+- Core arithmetic uses 96-bit `rust_decimal::Decimal`, eliminating IEEE 754 representation artifacts (`0.1 + 0.2 = 0.3`).
+- Transcendental functions compute in `f64` rounded to 15 significant digits. In `Deg` and `Grad` modes, angles are reduced modulo `360` / `400` in `Decimal` first: `sin(180°)` and `cos(90°)` are strictly `0`, while poles (`tan(90°)`, `tan(π/2)`, `cot(180°)`) return `ErrorKind::Domain` (`Math ERROR`).
+- Negative zero (`-0`) is normalized away at the `Decimal` and formatting layers.
+- Every error carries a byte `Span` and is classified via `ErrorCategory::{Syntax, Math}` — zero `.unwrap()` / `.expect()` on user input and no leaking `NaN`/`Infinity` in the UI.
 
-### 2. Парсер и приоритеты (Casio ClassWiz)
-- Приоритет (от низшего к высшему): `in`-конвертация → `|` → `xor` → `&` → `<<`/`>>` → `+`/`-` → `*`/`/`/`mod`/`of`/`%` → неявное умножение (`2(3+4)`, `(2+3)(4+5)`, `(2+3)2`, `2pi`, `3sin(30)`, `2Ans`, `1/2pi = 1/(2π)`) → унарные `-`/`+`/`~` → `^` (правоассоциативная: `2^3^2 = 512`, `-2^2 = -4`) → постфиксные `!`, `%`, `²`, `³` → первичные выражения.
-- `auto_close_parens` автоматически закрывает незакрытые скобки на `=` в инженерном режиме (`sin(30` → `sin(30)`).
+### 2. Parser & Precedence (Casio ClassWiz)
+- Precedence (low to high): `in`-conversion → `|` → `xor` → `&` → `<<`/`>>` → `+`/`-` → `*`/`/`/`mod`/`of`/`%` → implicit multiplication (`2(3+4)`, `(2+3)(4+5)`, `(2+3)2`, `2pi`, `3sin(30)`, `2Ans`, `1/2pi = 1/(2π)`) → unary `-`/`+`/`~` → `^` (right-associative: `2^3^2 = 512`, `-2^2 = -4`) → postfix `!`, `%`, `²`, `³` → primaries.
+- `auto_close_parens` automatically balances trailing open parentheses on `=` in Scientific mode (`sin(30` → `sin(30)`).
 
-### 3. Размерностный анализ (`units.rs`)
-- Размерность представлена компактным 8-байтовым вектором степеней `Dim([i8; 8])` (длина, масса, время, ток, температура, количество вещества, сила света, информация в битах).
-- Смещённые шкалы (`°C`, `°F`) корректно преобразуются в кельвины и обратно без потери точности.
+### 3. Dimensional Analysis (`units.rs`)
+- Physical dimensions are represented as a compact 8-byte exponent vector `Dim([i8; 8])` (length, mass, time, current, temperature, amount, luminous intensity, information in bits).
+- Offset temperature scales (`°C`, `°F`) convert accurately through Kelvin without precision drift.
 
-### 4. Интерактивный 2D Natural-V.P.A.M. рендер (`math_display.rs` + `sci_view.rs`)
-- Отдельный отказоустойчивый парсер строит дерево `MathNode` (`Frac`, `Sup`, `Sqrt`, `Paren`, `Slot`) с точными байтовыми диапазонами.
-- При отрисовке собираются `HitZone`-области и позиция мигающего курсора `CaretPos`, позволяя кликать мышью прямо в числитель, знаменатель или между цифрами.
-- Распарсенное дерево `MathNode` кэшируется в `ScientificView` (нет повторного парсинга на тиках мигания курсора).
+### 4. Interactive 2D Natural-V.P.A.M. Renderer (`math_display.rs` + `sci_view.rs`)
+- A resilient 2D parser builds a spanned `MathNode` tree (`Frac`, `Sup`, `Sqrt`, `Paren`, `Slot`) even for incomplete expressions.
+- Painting collects clickable `HitZone` rectangles and exact `CaretPos` geometry so users can click directly inside numerators, denominators, or between digits.
+- The parsed `MathNode` tree is cached inside `ScientificView`, avoiding re-parsing on cursor blink ticks.
 
-### 5. Производительность UI и отсутствие лишних аллокаций
-- **Блокнот:** кэширует `LayoutJob` по ключу `(doc_version, theme, accent, font_size, wrap_width)` (а не `Arc<Galley>`, чтобы избежать устаревания UV при перепаковке атласа шрифтов) и кэширует отформатированные строки результатов.
-- **Плоттер:** кэширует семплированные сегменты и точки прилипания по `(version, bounds)` и передаёт их в `egui_plot` через `PlotPoints::Borrowed` без копирования.
-- **Программист:** кэширует результат конвертера единиц по `(cat, from, to, val)`.
-- **Автосохранение и тосты:** дебаунс записи `state.toml` (`0.8s`) и тосты используют `request_repaint_after`, не нагружая CPU/GPU в простое.
+### 5. UI Performance & Caching
+- **Notebook:** caches `LayoutJob` keyed by `(doc_version, theme, accent, font_size, wrap_width)` (avoiding stale glyph-atlas UVs) along with formatted result strings.
+- **Plotter:** caches sampled curve segments and snap points by `(version, bounds)` and passes them via `PlotPoints::Borrowed` with zero per-frame copies.
+- **Programmer:** caches unit converter evaluations by `(cat, from, to, val)`.
+- **Idle Efficiency:** debounced TOML saves (`0.8s`) and toast notifications use `request_repaint_after` so idle CPU/GPU usage stays near zero.
 
 ---
 
-## Горячие клавиши
+## Keyboard Shortcuts
 
-| Сочетание | Действие |
+| Shortcut | Action |
 |---|---|
-| `Ctrl+Alt+Space` | Глобальный вызов / фокус окна |
-| `Ctrl+1` … `Ctrl+4` | Переключение вкладок (Блокнот / Инженерный / Графики / Программист) |
-| `Ctrl+T` | Переключение темы (Тёмная / Светлая с акцентом Windows) |
-| `Ctrl+L` | Переключение языка (RU / EN) |
-| `Ctrl++` / `Ctrl+-` | Увеличить / уменьшить шрифт в Блокноте |
-| `◀` `▶` `▲` `▼` `Tab` | Навигация по выражению, дробям и истории в Инженерном режиме |
-| `Esc` | Очистить выражение / закрыть меню `CONST` |
+| `Ctrl+Alt+Space` | Global summon / focus window |
+| `Ctrl+1` … `Ctrl+4` | Switch tabs (Notebook / Scientific / Plotter / Programmer) |
+| `Ctrl+T` | Toggle theme (Dark / Light with Windows accent) |
+| `Ctrl+L` | Toggle language (EN / RU) |
+| `Ctrl++` / `Ctrl+-` | Increase / decrease Notebook font size |
+| `◀` `▶` `▲` `▼` `Tab` | Navigate expression, fractions, and history in Scientific mode |
+| `Esc` | Clear expression / close `CONST` menu |
 
 ---
 
-## Сборка из исходников
+## Building from Source
 
-Требуется Rust (`edition = 2024`).
+Requires Rust (`edition = 2024`).
 
 ```bash
-# Запуск тестов всего workspace (72 теста)
+# Run the full workspace test suite (72 tests)
 cargo test --workspace
 
-# Проверка линтером
+# Run Clippy with warnings as errors
 cargo clippy --workspace --all-targets -- -D warnings
 
-# Оптимизированная release-сборка (-O3, fat LTO, single codegen-unit, strip)
+# Optimized release build (-O3, fat LTO, single codegen-unit, strip)
 cargo build --release -p lumina-ui
 ```
 
-Готовый бинарник для Windows доступен в разделе **Releases**.
+Prebuilt Windows x64 binaries are available in **Releases**.
 
 ---
 
-## Лицензия
+## License
 
-Распространяется под лицензией **MIT**. Подробности — в файле [LICENSE](LICENSE).
+Licensed under the **MIT License**. See [LICENSE](LICENSE) for details.

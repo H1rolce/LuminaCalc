@@ -1,7 +1,3 @@
-//! 2D function plotting engine: fast `f64` AST evaluator, free-parameter
-//! extraction for auto-generated sliders, discontinuity-aware sampling, and
-//! numerical root / intersection / extremum solvers for cursor snapping.
-
 use crate::error::{CalcError, CalcResult, ErrorKind};
 use crate::eval;
 use crate::lexer::{Tok, lex};
@@ -29,7 +25,6 @@ pub struct SnapPoint {
     pub kind: SnapKind,
     pub x: f64,
     pub y: f64,
-    /// Primary curve index (and secondary for intersections).
     pub curve_a: usize,
     pub curve_b: Option<usize>,
 }
@@ -38,7 +33,6 @@ fn is_angle_unit(name: &str) -> bool {
     units::lookup(name).is_some_and(|u| u.dim.is_none())
 }
 
-/// Parses a plot equation such as `y = a * sin(b * x)`, `f(x) = x^2 - 1`, or `sin(x)`.
 pub fn compile_plot(src: &str) -> CalcResult<CompiledPlot> {
     let raw_toks = lex(src);
     let toks: Vec<_> = raw_toks.into_iter().filter(|t| t.tok != Tok::Comment).collect();
@@ -49,7 +43,6 @@ pub fn compile_plot(src: &str) -> CalcResult<CompiledPlot> {
     let mut skip = 0usize;
     let mut indep: Box<str> = "x".into();
 
-    // `f(x) = <expr>`
     if toks.len() >= 5
         && matches!(toks[0].tok, Tok::Ident(_))
         && toks[1].tok == Tok::LParen
@@ -65,7 +58,6 @@ pub fn compile_plot(src: &str) -> CalcResult<CompiledPlot> {
         && matches!(toks[0].tok, Tok::Ident(_))
         && toks[1].tok == Tok::Assign
     {
-        // `y = <expr>` (or `z = <expr>`)
         skip = 2;
     }
 
@@ -99,7 +91,6 @@ fn collect_params(expr: &Expr, indep: &str, out: &mut Vec<Box<str>>) {
             collect_params(b, indep, out);
         }
         ExprKind::Call { name, args, .. } => {
-            // `a(x + 1)` -> `a` is an implicit-multiplication parameter
             if eval::function(name).is_none() && args.len() == 1 && name.as_ref() != indep {
                 push_unique(out, name);
             }
@@ -131,7 +122,6 @@ fn const_f64(name: &str) -> Option<f64> {
         .and_then(|u| u.factor.to_f64())
 }
 
-/// Fast zero-allocation `f64` evaluation of a compiled plot expression.
 pub fn eval_f64(expr: &Expr, indep: &str, x: f64, params: &[(Box<str>, f64)]) -> f64 {
     match &expr.kind {
         ExprKind::Number(d, _) => d.to_f64().unwrap_or(f64::NAN),
@@ -196,7 +186,6 @@ pub fn eval_f64(expr: &Expr, indep: &str, x: f64, params: &[(Box<str>, f64)]) ->
         }
         ExprKind::Call { name, args, .. } => {
             let Some(canon) = eval::function(name) else {
-                // Implicit multiplication: `a(x + 1)`
                 if args.len() == 1 {
                     let lhs = if name.as_ref() == indep {
                         x
@@ -281,8 +270,6 @@ pub fn eval_f64(expr: &Expr, indep: &str, x: f64, params: &[(Box<str>, f64)]) ->
     }
 }
 
-/// Samples a curve across `[x_min, x_max]`, splitting into separate branches
-/// across NaNs, infinities, and vertical asymptotes (`tan(x)`, `1/x`).
 pub fn sample_curve(
     plot: &CompiledPlot,
     x_min: f64,
@@ -316,7 +303,6 @@ pub fn sample_curve(
         }
         if let Some([px, py]) = prev {
             let dy = (y - py).abs();
-            // Detect vertical asymptote: huge jump accompanied by sign flip or midpoint divergence.
             if dy > jump_limit {
                 let mid = eval_f64(&plot.expr, &plot.indep, 0.5 * (px + x), params);
                 let continuous = mid.is_finite()
@@ -396,8 +382,6 @@ fn push_snap_dedup(out: &mut Vec<SnapPoint>, pt: SnapPoint, eps_x: f64, eps_y: f
     }
 }
 
-/// Finds roots (`y = 0`), Y-intercepts, local extrema, and pairwise intersections
-/// within the visible bounds `[x_min, x_max] × [y_min, y_max]`.
 pub fn find_snap_points(
     curves: &[&CompiledPlot],
     x_min: f64,
@@ -425,7 +409,6 @@ pub fn find_snap_points(
 
     let mut out = Vec::new();
 
-    // Sample all curves once on the coarse grid so intersection checks reuse values.
     let mut grids: Vec<Vec<f64>> = Vec::with_capacity(curves.len());
     for c in curves {
         let mut ys = Vec::with_capacity(steps + 1);
@@ -440,7 +423,6 @@ pub fn find_snap_points(
         let f = |x: f64| eval_f64(&c.expr, &c.indep, x, params);
         let ys = &grids[ci];
 
-        // Y-intercept at x = 0
         if x_min <= 0.0 && 0.0 <= x_max {
             let y0 = f(0.0);
             if y0.is_finite() && y0 >= y_min && y0 <= y_max {
@@ -450,7 +432,6 @@ pub fn find_snap_points(
             }
         }
 
-        // Roots (sign changes)
         for i in 0..steps {
             let (y0, y1) = (ys[i], ys[i + 1]);
             if !(y0.is_finite() && y1.is_finite()) || (y1 - y0).abs() > jump_limit {
@@ -478,7 +459,6 @@ pub fn find_snap_points(
             }
         }
 
-        // Tangential roots (`y = x^2`) and local extrema
         for i in 1..steps {
             let (y0, y1, y2) = (ys[i - 1], ys[i], ys[i + 1]);
             if !(y0.is_finite() && y1.is_finite() && y2.is_finite()) {
@@ -522,7 +502,6 @@ pub fn find_snap_points(
         }
     }
 
-    // Pairwise intersections
     for i in 0..curves.len() {
         for j in (i + 1)..curves.len() {
             let (ci, cj) = (curves[i], curves[j]);
@@ -602,14 +581,11 @@ mod tests {
         let p2 = compile_plot("y = x - 2").expect("p2");
         let pts = find_snap_points(&[&p1, &p2], -5.0, 5.0, -6.0, 10.0, 400, &[]);
 
-        // Roots of x^2 - 4 are -2 and 2
         assert!(pts.iter().any(|p| p.kind == SnapKind::Root && (p.x + 2.0).abs() < 1e-4));
         assert!(pts.iter().any(|p| p.kind == SnapKind::Root && (p.x - 2.0).abs() < 1e-4));
-        // Extremum of x^2 - 4 at (0, -4)
         assert!(pts
             .iter()
             .any(|p| p.kind == SnapKind::Extremum && p.x.abs() < 1e-3 && (p.y + 4.0).abs() < 1e-3));
-        // Intersections of x^2 - 4 = x - 2 => x^2 - x - 2 = 0 => x = -1, x = 2
         assert!(pts
             .iter()
             .any(|p| p.kind == SnapKind::Intersection && (p.x + 1.0).abs() < 1e-4 && (p.y + 3.0).abs() < 1e-4));

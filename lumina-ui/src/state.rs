@@ -1,5 +1,3 @@
-//! Persistent application state stored as clean TOML in the user's config directory.
-
 use crate::i18n::Lang;
 use crate::style::ThemeId;
 use serde::{Deserialize, Serialize};
@@ -74,7 +72,7 @@ impl Default for AppState {
             precision: 8,
             notebook_text: default_doc,
             sci_history: Vec::new(),
-            sci_angle_unit: 0, // Deg
+            sci_angle_unit: 0,
             plot_curves: vec![
                 SavedPlotCurve {
                     expr: "y = a * sin(b * x)".into(),
