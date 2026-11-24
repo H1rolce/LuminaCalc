@@ -108,9 +108,7 @@ pub fn show_titlebar(
     let outer_pad = (bar_rect.width() * 0.018).clamp(14.0, 28.0);
     let btn_y = bar_rect.center().y;
     let ctrl_gap = 6.0f32;
-    let logo_r = 8.5f32;
-    let logo_center = Pos2::new(bar_rect.left() + outer_pad + logo_r, btn_y);
-    let left_icon_limit = logo_center.x + logo_r + 12.0;
+    let left_edge = bar_rect.left() + outer_pad;
 
     // ── Right: Theme, Language, Pin, Window Controls (uniform spacing & aligned right edge) ──
     let mut right_x = bar_rect.right() - outer_pad;
@@ -271,7 +269,7 @@ pub fn show_titlebar(
     let tab_h = 28.0f32;
     let pad = 3.0f32;
     let tab_gap = 2.0f32;
-    let avail_tabs_w = (right_limit - left_icon_limit).max(160.0);
+    let avail_tabs_w = (right_limit - left_edge).max(160.0);
 
     // Pick crisp font size & symmetrical per-tab horizontal padding so every label fits cleanly.
     let mut tab_fs = 13.0f32;
@@ -311,32 +309,33 @@ pub fn show_titlebar(
     let group_w = cursor_x + pad * 2.0;
     let group_h = tab_h + pad * 2.0;
 
-    // Continuous clamp from true window center into `[left_icon_limit, right_limit - group_w]`
+    // Continuous clamp from true window center into `[left_edge, right_limit - group_w]`
     // so resizing never causes a discontinuous jump.
     let win_centered_left = bar_rect.center().x - group_w * 0.5;
-    let max_left = (right_limit - group_w).max(left_icon_limit);
-    let group_left = win_centered_left.clamp(left_icon_limit, max_left);
+    let max_left = (right_limit - group_w).max(left_edge);
+    let group_left = win_centered_left.clamp(left_edge, max_left);
     let group_rect = Rect::from_min_size(
         Pos2::new(group_left, btn_y - group_h * 0.5),
         Vec2::new(group_w, group_h),
     );
 
-    // ── Left: vector Lumina spark logo + app title (shown only when it fits without moving tabs) ──
-    let show_brand_text = group_rect.left() >= logo_center.x + logo_r + 98.0;
-    let brand_w = if show_brand_text { 112.0 } else { logo_r * 2.0 + 4.0 };
-    let brand_rect = Rect::from_min_size(
-        Pos2::new(bar_rect.left() + outer_pad - 2.0, bar_rect.top() + 6.0),
-        Vec2::new(brand_w, bar_h - 12.0),
+    // ── Left: clean app title only (shown when it fits without pushing tabs) ──
+    let title_galley = ui.painter().layout_no_wrap(
+        "LuminaCalc".to_owned(),
+        FontId::proportional(14.0),
+        palette.text_primary,
     );
-    ui.interact(brand_rect, Id::unique("tb_brand"), Sense::hover())
-        .on_hover_text(s.hotkey_hint);
-    paint_lumina_logo(ui.painter(), logo_center, logo_r, palette);
-    if show_brand_text {
-        ui.painter().text(
-            Pos2::new(logo_center.x + logo_r + 8.0, btn_y),
-            egui::Align2::LEFT_CENTER,
-            "LuminaCalc",
-            FontId::proportional(14.0),
+    let title_w = title_galley.size().x;
+    if group_rect.left() >= left_edge + title_w + 14.0 {
+        let brand_rect = Rect::from_min_size(
+            Pos2::new(left_edge, bar_rect.top() + 6.0),
+            Vec2::new(title_w + 4.0, bar_h - 12.0),
+        );
+        ui.interact(brand_rect, Id::unique("tb_brand"), Sense::hover())
+            .on_hover_text(s.hotkey_hint);
+        ui.painter().galley(
+            Pos2::new(left_edge, btn_y - title_galley.size().y * 0.5),
+            title_galley,
             palette.text_primary,
         );
     }
@@ -429,21 +428,4 @@ fn paint_win_button(
     ui.painter().rect_filled(rect, CornerRadius::same(6), bg);
     draw_icon(ui.painter(), rect.center(), fg);
     resp.clicked()
-}
-
-/// Crisp vector 4-point Lumina prism icon.
-fn paint_lumina_logo(painter: &egui::Painter, c: Pos2, r: f32, palette: &Palette) {
-    let inner = r * 0.34;
-    let pts = vec![
-        Pos2::new(c.x, c.y - r),
-        Pos2::new(c.x + inner, c.y - inner),
-        Pos2::new(c.x + r, c.y),
-        Pos2::new(c.x + inner, c.y + inner),
-        Pos2::new(c.x, c.y + r),
-        Pos2::new(c.x - inner, c.y + inner),
-        Pos2::new(c.x - r, c.y),
-        Pos2::new(c.x - inner, c.y - inner),
-    ];
-    painter.add(egui::Shape::convex_polygon(pts, palette.accent, Stroke::NONE));
-    painter.circle_filled(c, r * 0.22, palette.accent_alt);
 }
