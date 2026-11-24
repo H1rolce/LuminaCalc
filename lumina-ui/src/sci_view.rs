@@ -64,6 +64,8 @@ enum KeyLabel {
 enum KeyAction {
     Insert { token: &'static str, after_commit: AfterCommit },
     InsertHyp { token: &'static str, after_commit: AfterCommit },
+    OpenParen,
+    CloseParen,
     Fraction { mixed: bool },
     MemClear,
     MemStore,
@@ -453,11 +455,67 @@ impl ScientificView {
         }
     }
 
-    /// Finds the enclosing `(`..`)` pair containing `self.cursor` (innermost).
-    fn enclosing_parens(&self) -> Option<(usize, usize)> {
+    /// Inserts `(` cleanly. Inside a fraction numerator/denominator, inserts a balanced `()`
+    /// pair with the cursor inside `(|)` so the enclosing fraction never collapses while typing.
+    pub fn insert_open_paren(&mut self) {
+        if self.committed {
+            self.expr.clear();
+            self.cursor = 0;
+        }
+        self.committed = false;
+        self.history_cursor = None;
+        self.clamp_cursor();
+
+        if self.enclosing_fraction().is_some() {
+            self.expr.insert_str(self.cursor, "()");
+            self.cursor += 1;
+        } else {
+            self.expr.insert(self.cursor, '(');
+            self.cursor += 1;
+        }
+        self.recompute();
+    }
+
+    /// Inserts `)` when unclosed `(` exist, or smoothly steps past an auto-balanced inner `)`.
+    pub fn insert_close_paren(&mut self) {
+        self.clamp_cursor();
+        self.committed = false;
+        self.history_cursor = None;
+
+        if self.expr[self.cursor..].starts_with(')')
+            && let Some((open, close)) = self.enclosing_parens_at(self.cursor)
+            && close == self.cursor
+        {
+            let is_frac_delim = self.expr[close..].starts_with(")/(")
+                || (open >= 2 && self.expr[..open + 1].ends_with(")/("));
+            if !is_frac_delim {
+                self.cursor += 1;
+                self.recompute();
+                return;
+            }
+        }
+
+        let mut depth = 0i32;
+        for ch in self.expr[..self.cursor].chars() {
+            match ch {
+                '(' => depth += 1,
+                ')' => depth = (depth - 1).max(0),
+                _ => {}
+            }
+        }
+        let min_depth = if self.enclosing_fraction().is_some() { 1 } else { 0 };
+        if depth > min_depth {
+            self.expr.insert(self.cursor, ')');
+            self.cursor += 1;
+            self.recompute();
+        }
+    }
+
+    /// Finds the innermost enclosing `(`..`)` pair containing `pos`.
+    fn enclosing_parens_at(&self, pos: usize) -> Option<(usize, usize)> {
         let mut depth = 0i32;
         let mut open_pos = None;
-        for (b, c) in self.expr[..self.cursor].char_indices().rev() {
+        for (b, c) in self.expr[..pos].char_indices().rev() {
             match c {
                 ')' => depth += 1,
                 '(' => {
@@ -487,12 +545,27 @@ impl ScientificView {
         None
     }
 
+    /// Walks outward from `self.cursor` through nested `(...)` groups to find the
+    /// enclosing fraction numerator or denominator `(open, close)`.
+    fn enclosing_fraction(&self) -> Option<(usize, usize)> {
+        let mut probe = self.cursor;
+        while let Some((open, close)) = self.enclosing_parens_at(probe) {
+            let is_num = self.expr[close..].starts_with(")/(");
+            let is_den = open >= 2 && self.expr[..open + 1].ends_with(")/(");
+            if is_num || is_den {
+                return Some((open, close));
+            }
+            probe = open;
+        }
+        None
+    }
+
     /// Jumps from numerator to denominator, or exits denominator to after the fraction.
     pub fn jump_fraction_down(&mut self) -> bool {
         self.clamp_cursor();
         self.committed = false;
 
-        if let Some((open, close)) = self.enclosing_parens() {
+        if let Some((open, close)) = self.enclosing_fraction() {
             // Case 1: currently inside numerator `(...|...)/(...)` -> jump to denominator!
             if self.expr[close..].starts_with(")/(") {
                 let den_open = close + 2;
@@ -533,7 +606,7 @@ impl ScientificView {
         self.clamp_cursor();
         self.committed = false;
 
-        if let Some((open, _close)) = self.enclosing_parens()
+        if let Some((open, _close)) = self.enclosing_fraction()
             && open >= 2
             && self.expr[..open + 1].ends_with(")/(")
         {
@@ -579,6 +652,17 @@ impl ScientificView {
                 self.recompute();
                 return;
             }
+        }
+
+        // Case 2b: inside an empty non-fraction paren pair `(|)` -> delete both `(` and `)`
+        if self.cursor >= 1
+            && self.expr[..self.cursor].ends_with('(')
+            && self.expr[self.cursor..].starts_with(')')
+        {
+            self.expr.replace_range(self.cursor - 1..self.cursor + 1, "");
+            self.cursor -= 1;
+            self.recompute();
+            return;
         }
 
         // Case 3: right after a closed fraction `(num)/(den)|` -> step inside denominator and delete
@@ -790,24 +874,29 @@ impl ScientificView {
         });
 
         for ch in typed.chars() {
-            if ch == '/' {
-                if self.committed && self.ans.is_some() {
-                    self.expr = "(Ans)/()".to_owned();
-                    self.cursor = self.expr.len() - 1;
-                    self.committed = false;
-                    self.history_cursor = None;
-                    self.recompute();
-                } else {
-                    self.insert_fraction(false);
+            match ch {
+                '/' => {
+                    if self.committed && self.ans.is_some() {
+                        self.expr = "(Ans)/()".to_owned();
+                        self.cursor = self.expr.len() - 1;
+                        self.committed = false;
+                        self.history_cursor = None;
+                        self.recompute();
+                    } else {
+                        self.insert_fraction(false);
+                    }
                 }
-            } else {
-                let mode = match ch {
-                    '+' | '-' | '*' | '^' | '%' | '!' => AfterCommit::ChainAns,
-                    ')' | ',' => AfterCommit::Keep,
-                    _ => AfterCommit::Replace,
-                };
-                let mut buf = [0u8; 4];
-                self.insert_token_mode(ch.encode_utf8(&mut buf), mode);
+                '(' => self.insert_open_paren(),
+                ')' => self.insert_close_paren(),
+                _ => {
+                    let mode = match ch {
+                        '+' | '-' | '*' | '^' | '%' | '!' => AfterCommit::ChainAns,
+                        ',' => AfterCommit::Keep,
+                        _ => AfterCommit::Replace,
+                    };
+                    let mut buf = [0u8; 4];
+                    self.insert_token_mode(ch.encode_utf8(&mut buf), mode);
+                }
             }
         }
         if enter {
@@ -937,6 +1026,8 @@ impl ScientificView {
                 self.insert_token_mode(token, after_commit);
                 self.hyp = false;
             }
+            KeyAction::OpenParen => self.insert_open_paren(),
+            KeyAction::CloseParen => self.insert_close_paren(),
             KeyAction::Fraction { mixed } => self.insert_fraction(mixed),
             KeyAction::MemClear => self.memory = None,
             KeyAction::MemStore => {
@@ -1497,8 +1588,8 @@ impl ScientificView {
                 KeySpec::sci("π", "e", ins_new("pi"), ins_new("e")),
             ],
             [
-                KeySpec::sci("(", "%", ins_new("("), ins_chain("%")),
-                KeySpec::sci(")", ",", ins_keep(")"), ins_keep(", ")),
+                KeySpec::sci("(", "%", KeyAction::OpenParen, ins_chain("%")),
+                KeySpec::sci(")", ",", KeyAction::CloseParen, ins_keep(", ")),
                 KeySpec::sci("MC", "STO", KeyAction::MemClear, KeyAction::MemStore),
                 KeySpec::sci("MR", "φ", ins_new("M"), ins_new("phi")),
                 KeySpec::sci("M-", "τ", KeyAction::MemAdd(-1), ins_new("tau")),
@@ -2149,5 +2240,41 @@ mod tests {
         assert_eq!(v.expr, "2 + ");
         v.backspace();
         assert_eq!(v.expr, "2");
+    }
+
+    #[test]
+    fn reference_fraction_with_parentheses_equals_14_over_3() {
+        // Exact flow from Brauberg SC-991ESP reference: `((2 + 5) * 2) / 3 = 14/3`
+        let mut v = ScientificView::default();
+        v.insert_fraction(false);
+        assert_eq!(v.expr, "()/()");
+
+        v.insert_open_paren();
+        assert_eq!(v.expr, "(())/()");
+        v.insert_token("2 + 5", false);
+        v.insert_close_paren(); // steps smoothly past inner `)`
+        v.insert_token(" * 2", false);
+        assert_eq!(v.expr, "((2 + 5) * 2)/()");
+
+        assert!(v.jump_fraction_down());
+        v.insert_token("3", false);
+        assert_eq!(v.expr, "((2 + 5) * 2)/(3)");
+
+        let val = v.last_eval.as_ref().expect("eval").as_ref().expect("ok");
+        assert_eq!(decimal_to_fraction(val.si, 10_000), Some((14, 3)));
+
+        // Stray `)` is ignored; nested paren inside fraction still navigates cleanly via `▼`.
+        v.clear_all();
+        v.insert_close_paren();
+        assert_eq!(v.expr, "");
+
+        v.insert_fraction(false);
+        v.insert_open_paren();
+        v.insert_token("2+5", false);
+        assert!(v.jump_fraction_down());
+        v.insert_token("3", false);
+        assert_eq!(v.expr, "((2+5))/(3)");
+        let val2 = v.last_eval.as_ref().expect("eval").as_ref().expect("ok");
+        assert_eq!(decimal_to_fraction(val2.si, 10_000), Some((7, 3)));
     }
 }
