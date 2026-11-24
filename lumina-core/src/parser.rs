@@ -281,10 +281,23 @@ impl<'a> Parser<'_, 'a> {
         Ok(l)
     }
 
-    /// Juxtaposition: an operand directly followed by an identifier or `(`.
+    /// Juxtaposition: an operand directly followed by an identifier, `(`, `#line`,
+    /// or a number right after a closing `)` (e.g. `(2+3)4`, while `1 2` remains an error).
     fn implicit(&mut self) -> CalcResult<Expr> {
         let mut l = self.unary()?;
-        while matches!(self.peek(), Some(Tok::Ident(_)) | Some(Tok::LParen) | Some(Tok::LineRef(_))) {
+        loop {
+            let prev_was_rparen = self
+                .pos
+                .checked_sub(1)
+                .and_then(|i| self.toks.get(i))
+                .is_some_and(|t| t.tok == Tok::RParen);
+            let next_starts_implicit = matches!(
+                self.peek(),
+                Some(Tok::Ident(_) | Tok::LParen | Tok::LineRef(_))
+            ) || (prev_was_rparen && matches!(self.peek(), Some(Tok::Number { .. })));
+            if !next_starts_implicit {
+                break;
+            }
             let r = self.unary()?;
             l = bin(BinOp::ImplicitMul, l, r);
         }
