@@ -168,6 +168,7 @@ pub struct ScientificView {
     history: Vec<HistoryItem>,
     history_cursor: Option<usize>,
     prng_state: u64,
+    const_menu_open: bool,
     state_dirty: bool,
 }
 
@@ -203,6 +204,7 @@ impl ScientificView {
             history,
             history_cursor: None,
             prng_state: 0x9E37_79B9_7F4A_7C15,
+            const_menu_open: false,
             state_dirty: false,
         }
     }
@@ -936,7 +938,11 @@ impl ScientificView {
         let input_id = Id::unique("lumina_sci_expr_input");
         let input_focused = ui.ctx().memory(|m| m.has_focus(input_id));
         if ui.ctx().input(|i| i.key_pressed(Key::Escape)) {
-            self.clear_all();
+            if self.const_menu_open {
+                self.const_menu_open = false;
+            } else {
+                self.clear_all();
+            }
         }
         if !input_focused {
             self.handle_direct_keyboard(ui, precision);
@@ -1105,7 +1111,7 @@ impl ScientificView {
                 ui.add_space(gap_y + 2.0);
 
                 let avail_w = ui.available_width();
-                self.show_control_row(ui, avail_w, ctrl_h, gap_x, scale, palette);
+                self.show_control_row(ui, avail_w, ctrl_h, gap_x, scale, lang, palette);
 
                 ui.add_space(gap_y + 1.0);
                 self.show_sci_keypad(ui, avail_w, sci_h, gap_x, gap_y, scale, precision, palette);
@@ -1452,6 +1458,7 @@ impl ScientificView {
             });
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn show_control_row(
         &mut self,
         ui: &mut Ui,
@@ -1459,10 +1466,14 @@ impl ScientificView {
         ctrl_h: f32,
         gap_x: f32,
         scale: f32,
+        lang: Lang,
         palette: &Palette,
     ) {
-        let ctrl_w = (avail_w - gap_x * 7.0) / 8.0;
+        // Exact 6-column grid aligned vertically with the 6-column scientific keypad below.
+        let ctrl_w = (avail_w - gap_x * 5.0) / 6.0;
         let ctrl_size = Vec2::new(ctrl_w, ctrl_h);
+        let mut const_anchor: Option<egui::Rect> = None;
+
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = gap_x;
             if paint_sci_key(ui, KeyLabel::Text("SHIFT"), "", ctrl_size, KeyTone::Shift, self.shift, false, scale, palette) {
@@ -1475,21 +1486,6 @@ impl ScientificView {
                 self.angle_unit = self.angle_unit.next();
                 self.state_dirty = true;
                 self.recompute();
-            }
-            if paint_sci_key(ui, KeyLabel::Text("◀"), "", ctrl_size, KeyTone::Sci, false, false, scale, palette) {
-                self.move_left();
-            }
-            if paint_sci_key(ui, KeyLabel::Text("▶"), "", ctrl_size, KeyTone::Sci, false, false, scale, palette) {
-                self.move_right();
-            }
-            if paint_sci_key(ui, KeyLabel::Text("▼"), "▲", ctrl_size, KeyTone::Sci, false, self.shift, scale, palette) {
-                if std::mem::take(&mut self.shift) {
-                    if !self.jump_fraction_up() {
-                        self.history_step(1);
-                    }
-                } else if !self.jump_fraction_down() {
-                    self.history_step(-1);
-                }
             }
             if paint_sci_key(
                 ui,
@@ -1532,7 +1528,134 @@ impl ScientificView {
                     DisplayMode::Engineering
                 };
             }
+            let const_start = ui.cursor().min;
+            if paint_sci_key(
+                ui,
+                KeyLabel::Text("CONST"),
+                "",
+                ctrl_size,
+                KeyTone::Sci,
+                self.const_menu_open,
+                false,
+                scale,
+                palette,
+            ) {
+                self.const_menu_open = !self.const_menu_open;
+            }
+            const_anchor = Some(egui::Rect::from_min_size(const_start, ctrl_size));
         });
+
+        if self.const_menu_open
+            && let Some(anchor) = const_anchor
+        {
+            self.show_const_popup(ui, anchor, lang, palette);
+        }
+    }
+
+    fn show_const_popup(
+        &mut self,
+        ui: &Ui,
+        anchor: egui::Rect,
+        lang: Lang,
+        palette: &Palette,
+    ) {
+        struct ConstEntry {
+            symbol: &'static str,
+            token: &'static str,
+            ru: &'static str,
+            en: &'static str,
+            preview: &'static str,
+        }
+        const CONSTANTS: &[ConstEntry] = &[
+            ConstEntry { symbol: "π", token: "pi", ru: "Число Пи", en: "Pi", preview: "3.14159265…" },
+            ConstEntry { symbol: "e", token: "e", ru: "Число Эйлера", en: "Euler's e", preview: "2.71828182…" },
+            ConstEntry { symbol: "τ", token: "tau", ru: "Тау (2π)", en: "Tau (2π)", preview: "6.28318530…" },
+            ConstEntry { symbol: "φ", token: "phi", ru: "Золотое сечение", en: "Golden ratio", preview: "1.61803398…" },
+            ConstEntry { symbol: "g", token: "9.80665", ru: "Ускорение своб. падения", en: "Standard gravity", preview: "9.80665" },
+            ConstEntry { symbol: "c", token: "299792458", ru: "Скорость света", en: "Speed of light", preview: "299 792 458" },
+            ConstEntry { symbol: "G", token: "6.6743e-11", ru: "Гравитационная пост.", en: "Gravitational const", preview: "6.6743e-11" },
+            ConstEntry { symbol: "h", token: "6.62607015e-34", ru: "Постоянная Планка", en: "Planck constant", preview: "6.626e-34" },
+            ConstEntry { symbol: "Nₐ", token: "6.02214076e23", ru: "Число Авогадро", en: "Avogadro const", preview: "6.022e23" },
+            ConstEntry { symbol: "k", token: "1.380649e-23", ru: "Пост. Больцмана", en: "Boltzmann const", preview: "1.381e-23" },
+            ConstEntry { symbol: "R", token: "8.314462618", ru: "Газовая постоянная", en: "Molar gas const", preview: "8.31446" },
+            ConstEntry { symbol: "e₀", token: "1.602176634e-19", ru: "Элементарный заряд", en: "Elementary charge", preview: "1.602e-19" },
+        ];
+
+        let popup_w = 290.0f32;
+        let viewport = ui.ctx().content_rect();
+        let x = (anchor.right() - popup_w).clamp(viewport.left() + 8.0, (viewport.right() - popup_w - 8.0).max(viewport.left() + 8.0));
+        let y = anchor.bottom() + 6.0;
+
+        let mut picked: Option<&'static str> = None;
+        let area_resp = egui::Area::new(Id::unique("lumina_sci_const_popup"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(Pos2::new(x, y))
+            .show(ui.ctx(), |ui| {
+                Frame::new()
+                    .fill(palette.bg_elevated)
+                    .stroke(Stroke::new(1.0, palette.border))
+                    .corner_radius(CornerRadius::same(10))
+                    .inner_margin(Margin::same(8))
+                    .show(ui, |ui| {
+                        ui.set_width(popup_w - 16.0);
+                        ScrollArea::vertical()
+                            .id_salt("sci_const_scroll")
+                            .max_height(260.0)
+                            .show(ui, |ui| {
+                                for entry in CONSTANTS {
+                                    let row_h = 28.0;
+                                    let (rect, resp) = ui.allocate_exact_size(
+                                        Vec2::new(ui.available_width(), row_h),
+                                        Sense::click(),
+                                    );
+                                    if resp.hovered() {
+                                        ui.ctx().set_cursor_icon(CursorIcon::PointingHand);
+                                        ui.painter().rect_filled(
+                                            rect,
+                                            CornerRadius::same(6),
+                                            palette.bg_hover,
+                                        );
+                                    }
+                                    ui.painter().text(
+                                        Pos2::new(rect.left() + 8.0, rect.center().y),
+                                        Align2::LEFT_CENTER,
+                                        entry.symbol,
+                                        FontId::monospace(13.5),
+                                        palette.syn_constant,
+                                    );
+                                    let desc = if lang == Lang::Ru { entry.ru } else { entry.en };
+                                    ui.painter().text(
+                                        Pos2::new(rect.left() + 34.0, rect.center().y),
+                                        Align2::LEFT_CENTER,
+                                        desc,
+                                        FontId::proportional(11.5),
+                                        palette.text_primary,
+                                    );
+                                    ui.painter().text(
+                                        Pos2::new(rect.right() - 8.0, rect.center().y),
+                                        Align2::RIGHT_CENTER,
+                                        entry.preview,
+                                        FontId::monospace(11.0),
+                                        palette.text_muted,
+                                    );
+                                    if resp.clicked() {
+                                        picked = Some(entry.token);
+                                    }
+                                }
+                            });
+                    });
+            });
+
+        if let Some(tok) = picked {
+            self.insert_token_mode(tok, AfterCommit::Replace);
+            self.const_menu_open = false;
+        } else if ui.ctx().input(|i| i.pointer.primary_pressed())
+            && let Some(pos) = ui.ctx().input(|i| i.pointer.interact_pos())
+            && !area_resp.response.rect.contains(pos)
+            && !anchor.contains(pos)
+        {
+            self.const_menu_open = false;
+        }
     }
 
     #[allow(clippy::too_many_arguments)]
