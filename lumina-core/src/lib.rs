@@ -15,10 +15,11 @@ pub mod programmer;
 pub mod units;
 pub mod value;
 
-pub use error::{CalcError, CalcResult, ErrorKind, Span};
+pub use error::{CalcError, CalcResult, ErrorCategory, ErrorKind, Span};
 pub use eval::{AngleUnit, Env, eval, eval_str};
 pub use highlight::{HighlightKind, HighlightSpan};
 pub use notebook::{LineEntry, LineOutput, Notebook};
+pub use parser::auto_close_parens;
 pub use plot::{CompiledPlot, SnapKind, SnapPoint, compile_plot, eval_f64, find_snap_points, sample_curve};
 pub use programmer::{BitRegister, BitWidth};
 pub use units::Dim;
