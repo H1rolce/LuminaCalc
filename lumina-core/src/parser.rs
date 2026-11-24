@@ -105,6 +105,36 @@ pub fn parse_expr(tokens: &[Token<'_>], src_len: usize) -> CalcResult<Expr> {
     }
 }
 
+/// Appends missing closing `)` before any trailing comment to match Casio ClassWiz
+/// auto-closing on `=` (e.g. `sin(30` → `sin(30)`, `2*(3+4` → `2*(3+4)`).
+pub fn auto_close_parens(src: &str) -> std::borrow::Cow<'_, str> {
+    let tokens = crate::lexer::lex(src);
+    let mut depth = 0usize;
+    let mut insert_at = src.len();
+    for t in &tokens {
+        match t.tok {
+            Tok::LParen => depth += 1,
+            Tok::RParen => depth = depth.saturating_sub(1),
+            Tok::Comment => {
+                insert_at = t.span.0;
+                break;
+            }
+            _ => {}
+        }
+    }
+    if depth == 0 {
+        return std::borrow::Cow::Borrowed(src);
+    }
+    let insert_at = src[..insert_at].trim_end().len();
+    let mut out = String::with_capacity(src.len() + depth);
+    out.push_str(&src[..insert_at]);
+    for _ in 0..depth {
+        out.push(')');
+    }
+    out.push_str(&src[insert_at..]);
+    std::borrow::Cow::Owned(out)
+}
+
 struct Parser<'t, 'a> {
     toks: &'t [Token<'a>],
     pos: usize,
@@ -504,5 +534,13 @@ mod tests {
         assert_eq!(parse_number("1.5e3", Radix::Dec), Some(Decimal::from(1500)));
         assert_eq!(parse_number("FF", Radix::Hex), Some(Decimal::from(255)));
         assert_eq!(parse_number("1e999", Radix::Dec), None);
+    }
+
+    #[test]
+    fn auto_close_parens_balances_trailing_open_groups() {
+        assert_eq!(auto_close_parens("sin(30").as_ref(), "sin(30)");
+        assert_eq!(auto_close_parens("2 * (3 + (4 + 5").as_ref(), "2 * (3 + (4 + 5))");
+        assert_eq!(auto_close_parens("sin(30 // deg").as_ref(), "sin(30) // deg");
+        assert!(matches!(auto_close_parens("(1 + 2)"), std::borrow::Cow::Borrowed(_)));
     }
 }
