@@ -133,7 +133,7 @@ impl Value {
 
     /// Magnitude expressed in the display unit (if any).
     pub fn display_magnitude(&self) -> Decimal {
-        match &self.unit {
+        let res = match &self.unit {
             Some(h) if !h.factor.is_zero() => {
                 let v = self.si.checked_div(h.factor).unwrap_or(self.si);
                 let res = v - h.offset;
@@ -147,7 +147,8 @@ impl Value {
                 res
             }
             _ => self.si,
-        }
+        };
+        if res.is_zero() { Decimal::ZERO } else { res }
     }
 
     pub fn unit_label(&self) -> Option<String> {
