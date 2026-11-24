@@ -19,7 +19,7 @@ pub enum MathNode {
     Frac { num: Box<MathNode>, den: Box<MathNode>, span: Range<usize> },
     Sup { base: Box<MathNode>, exp: Box<MathNode>, span: Range<usize> },
     Sqrt { inner: Box<MathNode>, span: Range<usize> },
-    Paren { inner: Box<MathNode>, span: Range<usize> },
+    Paren { inner: Box<MathNode>, closed: bool, span: Range<usize> },
 }
 
 impl MathNode {
@@ -386,12 +386,12 @@ impl MathParser<'_> {
             MTokKind::LParen => {
                 let inner_start = tok.span.end;
                 let inner = self.parse_seq(true, inner_start);
-                let end = if self.peek().is_some_and(|t| t.kind == MTokKind::RParen) {
-                    self.bump().map_or(inner.span().end, |t| t.span.end)
+                let (end, closed) = if self.peek().is_some_and(|t| t.kind == MTokKind::RParen) {
+                    (self.bump().map_or(inner.span().end, |t| t.span.end), true)
                 } else {
-                    inner.span().end
+                    (inner.span().end, false)
                 };
-                MathNode::Paren { inner: Box::new(inner), span: tok.span.start..end }
+                MathNode::Paren { inner: Box::new(inner), closed, span: tok.span.start..end }
             }
             MTokKind::Atom(word) => {
                 if word == "sqrt" && self.peek().is_some_and(|t| t.kind == MTokKind::LParen) {
@@ -847,16 +847,22 @@ pub fn paint_interactive(
                 below: mi.below,
             }
         }
-        MathNode::Paren { inner, span } => {
+        MathNode::Paren { inner, closed, span } => {
             let mi = measure(inner, painter, font_size);
             let pw = (font_size * 0.42).max(7.0);
             let top_y = mid_y - mi.above - 1.0;
             let bot_y = mid_y + mi.below + 1.0;
-            let stroke = Stroke::new((font_size * 0.075).clamp(1.3, 2.0), palette.syn_punct);
+            let thick = (font_size * 0.075).clamp(1.3, 2.0);
+            let open_stroke = Stroke::new(thick, palette.syn_punct);
+            let close_stroke = if *closed {
+                open_stroke
+            } else {
+                Stroke::new(thick, Palette::alpha(palette.text_muted, 85))
+            };
 
-            paint_paren_curve(painter, left_x + pw * 0.72, top_y, bot_y, -pw * 0.45, stroke);
+            paint_paren_curve(painter, left_x + pw * 0.72, top_y, bot_y, -pw * 0.45, open_stroke);
             paint_interactive(inner, painter, left_x + pw, mid_y, font_size, cursor_byte, hover_pos, palette, fb);
-            paint_paren_curve(painter, left_x + pw + mi.width + pw * 0.28, top_y, bot_y, pw * 0.45, stroke);
+            paint_paren_curve(painter, left_x + pw + mi.width + pw * 0.28, top_y, bot_y, pw * 0.45, close_stroke);
 
             fb.hits.push(HitZone {
                 rect: Rect::from_min_max(Pos2::new(left_x, top_y), Pos2::new(left_x + pw, bot_y)),
