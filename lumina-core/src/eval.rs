@@ -98,7 +98,7 @@ pub enum Special {
 
 pub fn special(name: &str) -> Option<Special> {
     match name {
-        "ans" | "prev" | "отв" | "пред" => Some(Special::Prev),
+        "ans" | "Ans" | "ANS" | "prev" | "отв" | "пред" => Some(Special::Prev),
         "sum" | "total" | "сумма" | "итого" => Some(Special::Sum),
         "avg" | "average" | "среднее" => Some(Special::Avg),
         _ => None,
@@ -166,7 +166,13 @@ fn mismatch(a: &Value, b: &Value, span: &Span) -> CalcError {
     CalcError::new(ErrorKind::DimensionMismatch(label(a), label(b)), span.clone())
 }
 
-/// Converts an `f64` result back to `Decimal`, rounding away binary noise.
+/// Strips the sign bit from negative zero so `-0` never leaks into values or UI.
+#[inline]
+fn normalize_zero(d: Decimal) -> Decimal {
+    if d.is_zero() { Decimal::ZERO } else { d }
+}
+
+/// Converts an `f64` result back to `Decimal`, rounding away IEEE 754 binary noise.
 fn from_f64(x: f64, span: &Span) -> CalcResult<Decimal> {
     if x.is_nan() {
         return err(ErrorKind::Domain, span);
@@ -174,11 +180,113 @@ fn from_f64(x: f64, span: &Span) -> CalcResult<Decimal> {
     if x.is_infinite() {
         return err(ErrorKind::Overflow, span);
     }
-    if x.abs() < 1e-15 {
+    if x == 0.0 {
         return Ok(Decimal::ZERO);
     }
     let d = Decimal::from_f64(x).ok_or_else(|| CalcError::new(ErrorKind::Overflow, span.clone()))?;
-    Ok(d.round_sf(15).unwrap_or(d).normalize())
+    Ok(normalize_zero(d.round_sf(15).unwrap_or(d).normalize()))
+}
+
+/// Like [`from_f64`], additionally snapping tiny trigonometric rounding residues (`< 1e-14`) to `0`.
+fn trig_from_f64(x: f64, span: &Span) -> CalcResult<Decimal> {
+    if x.is_finite() && x.abs() < 1e-14 {
+        return Ok(Decimal::ZERO);
+    }
+    from_f64(x, span)
+}
+
+/// Evaluates `sin`, `cos`, `tan`, or `cot` with exact modular reduction in `Deg`/`Grad`,
+/// clean pole detection (`tan(90°)` / `tan(π/2)` / `cot(180°)` → [`ErrorKind::Domain`]),
+/// and zero IEEE 754 drift at cardinal angles.
+fn eval_trig(canon: &str, v: &Value, angle_unit: AngleUnit, span: &Span) -> CalcResult<Decimal> {
+    if v.unit.is_none() {
+        match angle_unit {
+            AngleUnit::Deg => {
+                let c360 = Decimal::from(360);
+                let mut deg = v.si % c360;
+                if deg.is_sign_negative() {
+                    deg += c360;
+                }
+                if deg.fract().is_zero()
+                    && let Some(d_int) = deg.to_i32()
+                {
+                    match (canon, d_int) {
+                        ("tan", 90 | 270) | ("cot", 0 | 180) => return err(ErrorKind::Domain, span),
+                        ("sin", 0 | 180) | ("cos", 90 | 270) | ("tan", 0 | 180) | ("cot", 90 | 270) => {
+                            return Ok(Decimal::ZERO);
+                        }
+                        ("sin", 90) | ("cos", 0) | ("tan", 45 | 225) | ("cot", 45 | 225) => {
+                            return Ok(Decimal::ONE);
+                        }
+                        ("sin", 270) | ("cos", 180) | ("tan", 135 | 315) | ("cot", 135 | 315) => {
+                            return Ok(-Decimal::ONE);
+                        }
+                        ("sin", 30 | 150) | ("cos", 60 | 300) => {
+                            return Ok(Decimal::new(5, 1));
+                        }
+                        ("sin", 210 | 330) | ("cos", 120 | 240) => {
+                            return Ok(Decimal::new(-5, 1));
+                        }
+                        _ => {}
+                    }
+                }
+                let rad = to_f64(deg).to_radians();
+                return eval_trig_rad(canon, rad, span);
+            }
+            AngleUnit::Grad => {
+                let c400 = Decimal::from(400);
+                let mut grad = v.si % c400;
+                if grad.is_sign_negative() {
+                    grad += c400;
+                }
+                if grad.fract().is_zero()
+                    && let Some(g_int) = grad.to_i32()
+                {
+                    match (canon, g_int) {
+                        ("tan", 100 | 300) | ("cot", 0 | 200) => return err(ErrorKind::Domain, span),
+                        ("sin", 0 | 200) | ("cos", 100 | 300) | ("tan", 0 | 200) | ("cot", 100 | 300) => {
+                            return Ok(Decimal::ZERO);
+                        }
+                        ("sin", 100) | ("cos", 0) | ("tan", 50 | 250) | ("cot", 50 | 250) => {
+                            return Ok(Decimal::ONE);
+                        }
+                        ("sin", 300) | ("cos", 200) | ("tan", 150 | 350) | ("cot", 150 | 350) => {
+                            return Ok(-Decimal::ONE);
+                        }
+                        _ => {}
+                    }
+                }
+                let rad = to_f64(grad) * (std::f64::consts::PI / 200.0);
+                return eval_trig_rad(canon, rad, span);
+            }
+            AngleUnit::Rad => {}
+        }
+    }
+    eval_trig_rad(canon, to_f64(v.si), span)
+}
+
+fn eval_trig_rad(canon: &str, rad: f64, span: &Span) -> CalcResult<Decimal> {
+    if !rad.is_finite() {
+        return err(ErrorKind::Domain, span);
+    }
+    let out = match canon {
+        "sin" => rad.sin(),
+        "cos" => rad.cos(),
+        "tan" => {
+            if rad.cos().abs() < 1e-14 {
+                return err(ErrorKind::Domain, span);
+            }
+            rad.tan()
+        }
+        _ => {
+            let s = rad.sin();
+            if s.abs() < 1e-14 {
+                return err(ErrorKind::Domain, span);
+            }
+            rad.cos() / s
+        }
+    };
+    trig_from_f64(out, span)
 }
 
 fn to_f64(d: Decimal) -> f64 {
@@ -249,7 +357,7 @@ pub fn eval(e: &Expr, env: &Env) -> CalcResult<Value> {
             match op {
                 UnOp::Pos => Ok(v),
                 UnOp::Neg => {
-                    v.si = -v.si;
+                    v.si = normalize_zero(-v.si);
                     Ok(v)
                 }
                 UnOp::Not => {
@@ -267,13 +375,17 @@ pub fn eval(e: &Expr, env: &Env) -> CalcResult<Value> {
                     if !v.is_dimensionless() {
                         return err(ErrorKind::ExpectedDimensionless, &a.span);
                     }
-                    v.si /= Decimal::ONE_HUNDRED;
+                    v.si = normalize_zero(v.si / Decimal::ONE_HUNDRED);
                     Ok(v)
                 }
                 PostOp::Factorial => {
                     let n = to_int(&v, &a.span)?;
                     if n < 0 {
                         return err(ErrorKind::Domain, span);
+                    }
+                    // 27! ≈ 1.09e28 fits exactly in 96-bit Decimal; 28! overflows Decimal::MAX.
+                    if n > 27 {
+                        return err(ErrorKind::Overflow, span);
                     }
                     let mut acc = Decimal::ONE;
                     for k in 2..=n {
@@ -380,10 +492,16 @@ fn binary(op: BinOp, a: &Expr, b: &Expr, span: &Span, env: &Env) -> CalcResult<V
             return err(ErrorKind::ExpectedDimensionless, &inner.span);
         }
         let ratio = p.si / Decimal::ONE_HUNDRED;
-        let k = if op == BinOp::Add { Decimal::ONE + ratio } else { Decimal::ONE - ratio };
+        let overflow = || CalcError::new(ErrorKind::Overflow, span.clone());
+        let k = if op == BinOp::Add {
+            Decimal::ONE.checked_add(ratio)
+        } else {
+            Decimal::ONE.checked_sub(ratio)
+        }
+        .ok_or_else(overflow)?;
         let mut out = lhs;
         out.bare_unit = false;
-        out.si = out.si.checked_mul(k).ok_or_else(|| CalcError::new(ErrorKind::Overflow, span.clone()))?;
+        out.si = normalize_zero(out.si.checked_mul(k).ok_or_else(overflow)?);
         return Ok(out);
     }
     let rhs = eval(b, env)?;
@@ -398,8 +516,10 @@ pub fn apply_binary(op: BinOp, lhs: Value, rhs: Value, span: &Span, rhs_span: &S
             if lhs.dim != rhs.dim {
                 return Err(mismatch(&lhs, &rhs, span));
             }
-            let si = if op == BinOp::Add { lhs.si.checked_add(rhs.si) } else { lhs.si.checked_sub(rhs.si) }
-                .ok_or_else(overflow)?;
+            let si = normalize_zero(
+                if op == BinOp::Add { lhs.si.checked_add(rhs.si) } else { lhs.si.checked_sub(rhs.si) }
+                    .ok_or_else(overflow)?,
+            );
             let unit = lhs.unit.or(rhs.unit).map(|mut h| {
                 h.offset = Decimal::ZERO;
                 h
@@ -414,10 +534,15 @@ pub fn apply_binary(op: BinOp, lhs: Value, rhs: Value, span: &Span, rhs_span: &S
                 && let Some(h) = &rhs.unit
                 && !h.offset.is_zero()
             {
-                let si = (lhs.si + h.offset).checked_mul(h.factor).ok_or_else(overflow)?;
+                let si = normalize_zero(
+                    lhs.si
+                        .checked_add(h.offset)
+                        .and_then(|s| s.checked_mul(h.factor))
+                        .ok_or_else(overflow)?,
+                );
                 return Ok(Value { si, dim: rhs.dim, unit: rhs.unit, notation, bare_unit: false });
             }
-            let si = lhs.si.checked_mul(rhs.si).ok_or_else(overflow)?;
+            let si = normalize_zero(lhs.si.checked_mul(rhs.si).ok_or_else(overflow)?);
             let dim = lhs.dim * rhs.dim;
             let unit = combine_units(&lhs, &rhs, dim, '·');
             Ok(Value { si, dim, unit, notation, bare_unit: false })
@@ -426,7 +551,7 @@ pub fn apply_binary(op: BinOp, lhs: Value, rhs: Value, span: &Span, rhs_span: &S
             if rhs.si.is_zero() {
                 return err(ErrorKind::DivisionByZero, rhs_span);
             }
-            let si = lhs.si.checked_div(rhs.si).ok_or_else(overflow)?;
+            let si = normalize_zero(lhs.si.checked_div(rhs.si).ok_or_else(overflow)?);
             let dim = lhs.dim / rhs.dim;
             let unit = combine_units(&lhs, &rhs, dim, '/');
             Ok(Value { si, dim, unit, notation, bare_unit: false })
@@ -438,7 +563,7 @@ pub fn apply_binary(op: BinOp, lhs: Value, rhs: Value, span: &Span, rhs_span: &S
             if rhs.si.is_zero() {
                 return err(ErrorKind::DivisionByZero, rhs_span);
             }
-            let si = lhs.si.checked_rem(rhs.si).ok_or_else(overflow)?;
+            let si = normalize_zero(lhs.si.checked_rem(rhs.si).ok_or_else(overflow)?);
             Ok(Value { si, dim: lhs.dim, unit: lhs.unit, notation, bare_unit: false })
         }
         BinOp::Pow => pow(lhs, rhs, span, rhs_span),
@@ -541,16 +666,20 @@ fn call(name: &str, name_span: &Span, args: &[Expr], span: &Span, env: &Env) -> 
         if vals.len() == 1 { Ok(&vals[0]) } else { Err(arity(name, "1", vals.len(), name_span)) }
     };
     // Unit-preserving magnitude operations act on the displayed magnitude.
-    let map_mag = |v: &Value, f: &dyn Fn(Decimal) -> Decimal| -> Value {
+    let map_mag = |v: &Value, f: &dyn Fn(Decimal) -> Decimal| -> CalcResult<Value> {
         let mut out = v.clone();
         out.bare_unit = false;
         let shown = v.display_magnitude();
-        let r = f(shown);
+        let r = normalize_zero(f(shown));
         out.si = match &v.unit {
-            Some(h) => (r + h.offset) * h.factor,
+            Some(h) => normalize_zero(
+                r.checked_add(h.offset)
+                    .and_then(|s| s.checked_mul(h.factor))
+                    .ok_or_else(|| CalcError::new(ErrorKind::Overflow, span.clone()))?,
+            ),
             None => r,
         };
-        out
+        Ok(out)
     };
     let unary_f64 = |f: fn(f64) -> f64| -> CalcResult<Value> {
         let v = one()?;
@@ -568,23 +697,23 @@ fn call(name: &str, name_span: &Span, args: &[Expr], span: &Span, env: &Env) -> 
                 if v.si.is_sign_negative() && !v.si.is_zero() {
                     return err(ErrorKind::Domain, &arg_span(0));
                 }
-                v.si.sqrt().ok_or_else(|| CalcError::new(ErrorKind::Domain, arg_span(0)))?
+                normalize_zero(v.si.sqrt().ok_or_else(|| CalcError::new(ErrorKind::Domain, arg_span(0)))?)
             } else {
                 from_f64(to_f64(v.si).cbrt(), span)?
             };
             Ok(Value { si, dim, unit: None, notation: Notation::Auto, bare_unit: false })
         }
-        "abs" => Ok(map_mag(one()?, &|d| d.abs())),
-        "floor" => Ok(map_mag(one()?, &|d| d.floor())),
-        "ceil" => Ok(map_mag(one()?, &|d| d.ceil())),
-        "trunc" => Ok(map_mag(one()?, &|d| d.trunc())),
-        "sign" => Ok(Value::num(one()?.si.signum())),
+        "abs" => map_mag(one()?, &|d| d.abs()),
+        "floor" => map_mag(one()?, &|d| d.floor()),
+        "ceil" => map_mag(one()?, &|d| d.ceil()),
+        "trunc" => map_mag(one()?, &|d| d.trunc()),
+        "sign" => Ok(Value::num(normalize_zero(one()?.si.signum()))),
         "round" => match vals.len() {
-            1 => Ok(map_mag(&vals[0], &|d| d.round_dp_with_strategy(0, RoundingStrategy::MidpointAwayFromZero))),
+            1 => map_mag(&vals[0], &|d| d.round_dp_with_strategy(0, RoundingStrategy::MidpointAwayFromZero)),
             2 => {
                 let dp = to_int(&vals[1], &arg_span(1))?;
                 let dp = u32::try_from(dp).map_err(|_| CalcError::new(ErrorKind::Domain, arg_span(1)))?.min(28);
-                Ok(map_mag(&vals[0], &|d| d.round_dp_with_strategy(dp, RoundingStrategy::MidpointAwayFromZero)))
+                map_mag(&vals[0], &|d| d.round_dp_with_strategy(dp, RoundingStrategy::MidpointAwayFromZero))
             }
             n => Err(arity(name, "1–2", n, name_span)),
         },
@@ -667,15 +796,7 @@ fn call(name: &str, name_span: &Span, args: &[Expr], span: &Span, env: &Env) -> 
             if !v.is_dimensionless() {
                 return err(ErrorKind::ExpectedDimensionless, &arg_span(0));
             }
-            let raw = to_f64(v.si);
-            let rad = if v.unit.is_some() { raw } else { env.angle_unit.to_rad(raw) };
-            let out = match canon {
-                "sin" => rad.sin(),
-                "cos" => rad.cos(),
-                "tan" => rad.tan(),
-                _ => 1.0 / rad.tan(),
-            };
-            Ok(Value::num(from_f64(out, span)?))
+            Ok(Value::num(eval_trig(canon, v, env.angle_unit, span)?))
         }
         "asin" | "acos" | "atan" => {
             let v = one()?;
@@ -688,7 +809,7 @@ fn call(name: &str, name_span: &Span, args: &[Expr], span: &Span, env: &Env) -> 
                 "acos" => raw.acos(),
                 _ => raw.atan(),
             };
-            Ok(Value::num(from_f64(env.angle_unit.from_rad(rad), span)?))
+            Ok(Value::num(trig_from_f64(env.angle_unit.from_rad(rad), span)?))
         }
         "sinh" => unary_f64(f64::sinh),
         "cosh" => unary_f64(f64::cosh),
@@ -719,7 +840,7 @@ fn call(name: &str, name_span: &Span, args: &[Expr], span: &Span, env: &Env) -> 
             if vals[0].dim != vals[1].dim {
                 return Err(mismatch(&vals[0], &vals[1], span));
             }
-            Ok(Value::num(from_f64(
+            Ok(Value::num(trig_from_f64(
                 env.angle_unit.from_rad(to_f64(vals[0].si).atan2(to_f64(vals[1].si))),
                 span,
             )?))
@@ -918,5 +1039,63 @@ mod tests {
     fn hypot_and_lcm_overflow_return_error_instead_of_panicking() {
         assert_eq!(kind("hypot(2.5e14, 2.5e14)"), ErrorKind::Overflow);
         assert_eq!(kind("lcm(10000000000000000000, 10000000000000000001)"), ErrorKind::Overflow);
+    }
+
+    #[test]
+    fn classwiz_precedence_trig_zero_and_errors() {
+        // Right-associative power & unary minus below power
+        assert_eq!(show("2^3^2"), "512");
+        assert_eq!(show("-2^2"), "-4");
+        assert_eq!(show("(-2)^2"), "4");
+        assert_eq!(show("0.1 + 0.2"), "0.3");
+
+        // Implicit multiplication including `2(3+4)`, `2pi`, `3sin(30)`, `2Ans`, `1/2pi`
+        assert_eq!(show("2(3+4)"), "14");
+        let mut deg_env = Env {
+            angle_unit: AngleUnit::Deg,
+            prev: Some(Value::num(Decimal::from(5))),
+            ..Env::default()
+        };
+        assert_eq!(eval_str("3sin(30)", &deg_env).expect("ok").plain(10), "1.5");
+        assert_eq!(eval_str("2Ans", &deg_env).expect("ok").plain(10), "10");
+        // `1/2pi` == `1 / (2 * pi)` (Casio ClassWiz implicit-mul priority)
+        let inv_2pi = eval_str("1/2pi", &Env::default()).expect("ok").to_f64();
+        assert!((inv_2pi - 1.0 / (2.0 * std::f64::consts::PI)).abs() < 1e-12);
+
+        // Exact trig in Deg / Rad / Grad & no `-0`
+        assert_eq!(eval_str("sin(180)", &deg_env).expect("ok").plain(10), "0");
+        assert_eq!(eval_str("cos(90)", &deg_env).expect("ok").plain(10), "0");
+        assert_eq!(eval_str("sin(3600000)", &deg_env).expect("ok").plain(10), "0");
+        assert_eq!(eval_str("sin(180°)", &Env::default()).expect("ok").plain(10), "0");
+        assert_eq!(eval_str("cos(90°)", &Env::default()).expect("ok").plain(10), "0");
+        assert_eq!(show("-0"), "0");
+        assert_eq!(show("-1 * 0"), "0");
+        assert_eq!(eval_str("tan(90)", &deg_env).expect_err("pole").kind, ErrorKind::Domain);
+        assert_eq!(eval_str("cot(180)", &deg_env).expect_err("pole").kind, ErrorKind::Domain);
+        assert_eq!(kind("tan(pi / 2)"), ErrorKind::Domain);
+
+        // Inverse trig across angle modes
+        assert_eq!(eval_str("asin(0.5)", &deg_env).expect("ok").plain(10), "30");
+        assert_eq!(eval_str("acos(0.5)", &deg_env).expect("ok").plain(10), "60");
+        assert_eq!(eval_str("atan(1)", &deg_env).expect("ok").plain(10), "45");
+        deg_env.angle_unit = AngleUnit::Grad;
+        assert_eq!(eval_str("atan(1)", &deg_env).expect("ok").plain(10), "50");
+        assert_eq!(eval_str("tan(100)", &deg_env).expect_err("pole").kind, ErrorKind::Domain);
+
+        // Factorial domain & overflow
+        assert_eq!(kind("(-3)!"), ErrorKind::Domain);
+        assert_eq!(kind("2.5!"), ErrorKind::ExpectedInteger);
+        assert_eq!(kind("28!"), ErrorKind::Overflow);
+
+        // Error categories: SyntaxError vs MathError
+        assert!(kind("1 / 0").is_math());
+        assert!(kind("ln(-1)").is_math());
+        assert!(kind("asin(2)").is_math());
+        assert!(kind("(1 + 2").is_syntax());
+        assert!(kind("1 + ").is_syntax());
+
+        // Very small non-trig numbers must NOT be zeroed out
+        let tiny = eval_str("exp(-40)", &Env::default()).expect("ok");
+        assert!(!tiny.si.is_zero());
     }
 }
