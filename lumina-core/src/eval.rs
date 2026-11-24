@@ -652,8 +652,13 @@ fn arity(name: &str, expected: &'static str, got: usize, span: &Span) -> CalcErr
 
 fn call(name: &str, name_span: &Span, args: &[Expr], span: &Span, env: &Env) -> CalcResult<Value> {
     let Some(canon) = function(name).filter(|_| !env.vars.contains_key(name)) else {
-        // `a(b + 1)` with a variable/unit `a` → implicit multiplication
-        if args.len() == 1 && (env.vars.contains_key(name) || units::is_unit(name) || constant(name).is_some()) {
+        // `a(b + 1)` with a variable/unit/constant/special (`Ans(2+3)`) → implicit multiplication
+        if args.len() == 1
+            && (env.vars.contains_key(name)
+                || units::is_unit(name)
+                || constant(name).is_some()
+                || special(name).is_some())
+        {
             let lhs = ident(name, name_span, env)?;
             let rhs = eval(&args[0], env)?;
             return apply_binary(BinOp::Mul, lhs, rhs, span, &args[0].span);
@@ -1049,8 +1054,11 @@ mod tests {
         assert_eq!(show("(-2)^2"), "4");
         assert_eq!(show("0.1 + 0.2"), "0.3");
 
-        // Implicit multiplication including `2(3+4)`, `2pi`, `3sin(30)`, `2Ans`, `1/2pi`
+        // Implicit multiplication including `2(3+4)`, `(2+3)(4+5)`, `(2+3)2`, `2pi`, `3sin(30)`, `2Ans`, `Ans(2+3)`, `1/2pi`
         assert_eq!(show("2(3+4)"), "14");
+        assert_eq!(show("(2+3)(4+5)"), "45");
+        assert_eq!(show("(2+3)2"), "10");
+        assert_eq!(show("((2+5)*2)/3"), "4.6666666667");
         let mut deg_env = Env {
             angle_unit: AngleUnit::Deg,
             prev: Some(Value::num(Decimal::from(5))),
@@ -1058,6 +1066,7 @@ mod tests {
         };
         assert_eq!(eval_str("3sin(30)", &deg_env).expect("ok").plain(10), "1.5");
         assert_eq!(eval_str("2Ans", &deg_env).expect("ok").plain(10), "10");
+        assert_eq!(eval_str("Ans(2+3)", &deg_env).expect("ok").plain(10), "25");
         // `1/2pi` == `1 / (2 * pi)` (Casio ClassWiz implicit-mul priority)
         let inv_2pi = eval_str("1/2pi", &Env::default()).expect("ok").to_f64();
         assert!((inv_2pi - 1.0 / (2.0 * std::f64::consts::PI)).abs() < 1e-12);
