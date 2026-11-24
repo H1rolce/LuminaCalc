@@ -108,29 +108,9 @@ pub fn show_titlebar(
     let outer_pad = (bar_rect.width() * 0.018).clamp(14.0, 28.0);
     let btn_y = bar_rect.center().y;
     let ctrl_gap = 6.0f32;
-
-    // ── Left: vector Lumina spark logo + app title (compact icon-only on narrow windows) ──
-    let show_brand_text = bar_rect.width() >= 840.0;
     let logo_r = 8.5f32;
     let logo_center = Pos2::new(bar_rect.left() + outer_pad + logo_r, btn_y);
-    let brand_w = if show_brand_text { 112.0 } else { logo_r * 2.0 + 4.0 };
-    let brand_rect = Rect::from_min_size(
-        Pos2::new(bar_rect.left() + outer_pad - 2.0, bar_rect.top() + 6.0),
-        Vec2::new(brand_w, bar_h - 12.0),
-    );
-    ui.interact(brand_rect, Id::unique("tb_brand"), Sense::hover())
-        .on_hover_text(s.hotkey_hint);
-    paint_lumina_logo(ui.painter(), logo_center, logo_r, palette);
-    if show_brand_text {
-        ui.painter().text(
-            Pos2::new(logo_center.x + logo_r + 8.0, btn_y),
-            egui::Align2::LEFT_CENTER,
-            "LuminaCalc",
-            FontId::proportional(14.0),
-            palette.text_primary,
-        );
-    }
-    let left_limit = brand_rect.right() + 10.0;
+    let left_icon_limit = logo_center.x + logo_r + 12.0;
 
     // ── Right: Theme, Language, Pin, Window Controls (uniform spacing & aligned right edge) ──
     let mut right_x = bar_rect.right() - outer_pad;
@@ -281,7 +261,7 @@ pub fn show_titlebar(
     }
     let right_limit = theme_rect.left() - 10.0;
 
-    // ── Center: proportional segmented tab control, symmetrically centered in available span ──
+    // ── Center: proportional segmented tab control (smooth, jitter-free during resize) ──
     let tabs = [
         (ActiveTab::Notebook, s.tab_notebook),
         (ActiveTab::Scientific, s.tab_scientific),
@@ -291,7 +271,7 @@ pub fn show_titlebar(
     let tab_h = 28.0f32;
     let pad = 3.0f32;
     let tab_gap = 2.0f32;
-    let avail_tabs_w = (right_limit - left_limit).max(160.0);
+    let avail_tabs_w = (right_limit - left_icon_limit).max(160.0);
 
     // Pick crisp font size & symmetrical per-tab horizontal padding so every label fits cleanly.
     let mut tab_fs = 13.0f32;
@@ -303,7 +283,7 @@ pub fn show_titlebar(
             .size()
             .x;
     }
-    let min_needed = text_ws.iter().sum::<f32>() + 4.0 * 18.0 + tab_gap * 3.0 + pad * 2.0;
+    let min_needed = text_ws.iter().sum::<f32>() + 4.0 * 14.0 + tab_gap * 3.0 + pad * 2.0;
     if min_needed > avail_tabs_w {
         tab_fs = 12.0;
         for (i, (_, lbl)) in tabs.iter().enumerate() {
@@ -331,18 +311,35 @@ pub fn show_titlebar(
     let group_w = cursor_x + pad * 2.0;
     let group_h = tab_h + pad * 2.0;
 
-    // Prefer true window center when both sides keep comfortable clearance; otherwise center
-    // symmetrically inside `[left_limit, right_limit]` so left and right gaps are strictly equal.
+    // Continuous clamp from true window center into `[left_icon_limit, right_limit - group_w]`
+    // so resizing never causes a discontinuous jump.
     let win_centered_left = bar_rect.center().x - group_w * 0.5;
-    let group_left = if win_centered_left >= left_limit && win_centered_left + group_w <= right_limit {
-        win_centered_left
-    } else {
-        (0.5 * (left_limit + right_limit) - group_w * 0.5).max(left_limit)
-    };
+    let max_left = (right_limit - group_w).max(left_icon_limit);
+    let group_left = win_centered_left.clamp(left_icon_limit, max_left);
     let group_rect = Rect::from_min_size(
         Pos2::new(group_left, btn_y - group_h * 0.5),
         Vec2::new(group_w, group_h),
     );
+
+    // ── Left: vector Lumina spark logo + app title (shown only when it fits without moving tabs) ──
+    let show_brand_text = group_rect.left() >= logo_center.x + logo_r + 98.0;
+    let brand_w = if show_brand_text { 112.0 } else { logo_r * 2.0 + 4.0 };
+    let brand_rect = Rect::from_min_size(
+        Pos2::new(bar_rect.left() + outer_pad - 2.0, bar_rect.top() + 6.0),
+        Vec2::new(brand_w, bar_h - 12.0),
+    );
+    ui.interact(brand_rect, Id::unique("tb_brand"), Sense::hover())
+        .on_hover_text(s.hotkey_hint);
+    paint_lumina_logo(ui.painter(), logo_center, logo_r, palette);
+    if show_brand_text {
+        ui.painter().text(
+            Pos2::new(logo_center.x + logo_r + 8.0, btn_y),
+            egui::Align2::LEFT_CENTER,
+            "LuminaCalc",
+            FontId::proportional(14.0),
+            palette.text_primary,
+        );
+    }
 
     ui.painter().rect(
         group_rect,
@@ -352,15 +349,21 @@ pub fn show_titlebar(
         egui::StrokeKind::Inside,
     );
 
-    let active_idx = tabs.iter().position(|(t, _)| *t == tab).unwrap_or(0);
-    let target_x = tab_offsets[active_idx];
-    let target_w = tab_ws[active_idx];
-    let anim_x = ui.ctx().animate_value_with_time(Id::unique("lumina_tab_x"), target_x, 0.16);
-    let anim_w = ui.ctx().animate_value_with_time(Id::unique("lumina_tab_w"), target_w, 0.16);
+    // Animate normalized tab index (NOT pixel coordinates) so resizing has zero lag/jitter.
+    let active_idx = tabs.iter().position(|(t, _)| *t == tab).unwrap_or(0) as f32;
+    let anim_idx = ui
+        .ctx()
+        .animate_value_with_time(Id::unique("lumina_tab_slide"), active_idx, 0.16)
+        .clamp(0.0, (tabs.len() - 1) as f32);
+    let i0 = anim_idx.floor() as usize;
+    let i1 = (anim_idx.ceil() as usize).min(tabs.len() - 1);
+    let frac = (anim_idx - i0 as f32).clamp(0.0, 1.0);
+    let ind_x = tab_offsets[i0] + (tab_offsets[i1] - tab_offsets[i0]) * frac;
+    let ind_w = tab_ws[i0] + (tab_ws[i1] - tab_ws[i0]) * frac;
 
     let indicator_rect = Rect::from_min_size(
-        Pos2::new(group_rect.left() + pad + anim_x, group_rect.top() + pad),
-        Vec2::new(anim_w, tab_h),
+        Pos2::new(group_rect.left() + pad + ind_x, group_rect.top() + pad),
+        Vec2::new(ind_w, tab_h),
     );
     ui.painter().rect(
         indicator_rect,
