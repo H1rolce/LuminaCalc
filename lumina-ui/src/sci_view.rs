@@ -18,8 +18,8 @@ use egui::{
     Painter, Pos2, ScrollArea, Sense, Stroke, TextEdit, Ui, Vec2,
 };
 use lumina_core::{
-    AngleUnit, CalcError, Env, FormatOptions, Value, decimal_to_fraction, eval_str,
-    format_engineering,
+    AngleUnit, CalcError, Env, ErrorCategory, FormatOptions, Value, auto_close_parens,
+    decimal_to_fraction, eval_str, format_engineering,
 };
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -44,6 +44,16 @@ enum KeyTone {
     Shift,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum AfterCommit {
+    /// Start a fresh expression (digits, constants, `(`, prefix functions).
+    Replace,
+    /// Chain from previous result as `Ans<token>` (binary & postfix operators).
+    ChainAns,
+    /// Keep editing the current expression as-is (`)`, `,`).
+    Keep,
+}
+
 #[derive(Debug, Clone, Copy)]
 enum KeyLabel {
     Text(&'static str),
@@ -52,8 +62,8 @@ enum KeyLabel {
 
 #[derive(Debug, Clone, Copy)]
 enum KeyAction {
-    Insert { token: &'static str, replace_on_commit: bool },
-    InsertHyp { token: &'static str, replace_on_commit: bool },
+    Insert { token: &'static str, after_commit: AfterCommit },
+    InsertHyp { token: &'static str, after_commit: AfterCommit },
     Fraction { mixed: bool },
     MemClear,
     MemStore,
@@ -106,12 +116,20 @@ impl KeySpec {
     }
 }
 
-const fn ins(token: &'static str, replace_on_commit: bool) -> KeyAction {
-    KeyAction::Insert { token, replace_on_commit }
+const fn ins_new(token: &'static str) -> KeyAction {
+    KeyAction::Insert { token, after_commit: AfterCommit::Replace }
 }
 
-const fn ins_hyp(token: &'static str, replace_on_commit: bool) -> KeyAction {
-    KeyAction::InsertHyp { token, replace_on_commit }
+const fn ins_chain(token: &'static str) -> KeyAction {
+    KeyAction::Insert { token, after_commit: AfterCommit::ChainAns }
+}
+
+const fn ins_keep(token: &'static str) -> KeyAction {
+    KeyAction::Insert { token, after_commit: AfterCommit::Keep }
+}
+
+const fn ins_hyp(token: &'static str) -> KeyAction {
+    KeyAction::InsertHyp { token, after_commit: AfterCommit::Replace }
 }
 
 struct CachedMathTree {
@@ -247,7 +265,12 @@ impl ScientificView {
             return;
         }
         let env = self.build_env();
-        self.last_eval = Some(eval_str(trimmed, &env));
+        let eval_input = if trimmed.ends_with('(') {
+            std::borrow::Cow::Borrowed(trimmed)
+        } else {
+            auto_close_parens(trimmed)
+        };
+        self.last_eval = Some(eval_str(&eval_input, &env));
     }
 
     fn format_value_text(&self, val: &Value, precision: u32) -> (String, Option<String>) {
@@ -292,9 +315,28 @@ impl ScientificView {
     /// Inserts `token` at `self.cursor`, keeping the caret right after the inserted text.
     /// Typing `7`, `7` inside `(|)/()` naturally produces `(77|)/()`.
     pub fn insert_token(&mut self, token: &str, replace_if_committed: bool) {
-        if self.committed && replace_if_committed {
-            self.expr.clear();
-            self.cursor = 0;
+        let mode = if replace_if_committed {
+            AfterCommit::Replace
+        } else {
+            AfterCommit::Keep
+        };
+        self.insert_token_mode(token, mode);
+    }
+
+    fn insert_token_mode(&mut self, token: &str, mode: AfterCommit) {
+        if self.committed {
+            match mode {
+                AfterCommit::Replace => {
+                    self.expr.clear();
+                    self.cursor = 0;
+                }
+                AfterCommit::ChainAns if self.ans.is_some() => {
+                    self.expr.clear();
+                    self.expr.push_str("Ans");
+                    self.cursor = self.expr.len();
+                }
+                AfterCommit::ChainAns | AfterCommit::Keep => {}
+            }
         }
         self.committed = false;
         self.history_cursor = None;
@@ -559,10 +601,12 @@ impl ScientificView {
             }
         }
 
-        // Default: delete one UTF-8 character before cursor.
-        if let Some((prev_b, _)) = self.expr[..self.cursor].char_indices().next_back() {
-            self.expr.replace_range(prev_b..self.cursor, "");
-            self.cursor = prev_b;
+        // Default: smart delete — remove multi-char tokens (`sin(`, `Ans`, `pi`, ` * 10^`, …) as a unit.
+        let del_len = smart_token_len_before(&self.expr[..self.cursor]);
+        if del_len > 0 && del_len <= self.cursor {
+            let start = self.cursor - del_len;
+            self.expr.replace_range(start..self.cursor, "");
+            self.cursor = start;
             self.recompute();
         }
     }
@@ -586,7 +630,19 @@ impl ScientificView {
         self.last_eval = None;
     }
 
-    fn evaluate_commit(&mut self, precision: u32) {
+    pub fn evaluate_commit(&mut self, precision: u32) {
+        self.clamp_cursor();
+        let trimmed = self.expr.trim();
+        if !trimmed.is_empty() && !self.has_empty_slot() {
+            let closed = auto_close_parens(trimmed);
+            if matches!(closed, std::borrow::Cow::Owned(_)) {
+                let env = self.build_env();
+                if eval_str(&closed, &env).is_ok() {
+                    self.expr = closed.into_owned();
+                    self.cursor = self.expr.len();
+                }
+            }
+        }
         self.recompute();
         if let Some(Ok(val)) = &self.last_eval {
             let val = val.clone();
@@ -735,11 +791,23 @@ impl ScientificView {
 
         for ch in typed.chars() {
             if ch == '/' {
-                self.insert_fraction(false);
+                if self.committed && self.ans.is_some() {
+                    self.expr = "(Ans)/()".to_owned();
+                    self.cursor = self.expr.len() - 1;
+                    self.committed = false;
+                    self.history_cursor = None;
+                    self.recompute();
+                } else {
+                    self.insert_fraction(false);
+                }
             } else {
-                let replace = ch.is_ascii_digit() || ch == '(' || ch.is_alphabetic();
+                let mode = match ch {
+                    '+' | '-' | '*' | '^' | '%' | '!' => AfterCommit::ChainAns,
+                    ')' | ',' => AfterCommit::Keep,
+                    _ => AfterCommit::Replace,
+                };
                 let mut buf = [0u8; 4];
-                self.insert_token(ch.encode_utf8(&mut buf), replace);
+                self.insert_token_mode(ch.encode_utf8(&mut buf), mode);
             }
         }
         if enter {
@@ -862,11 +930,11 @@ impl ScientificView {
 
     fn execute_key_action(&mut self, act: KeyAction, precision: u32) {
         match act {
-            KeyAction::Insert { token, replace_on_commit } => {
-                self.insert_token(token, replace_on_commit);
+            KeyAction::Insert { token, after_commit } => {
+                self.insert_token_mode(token, after_commit);
             }
-            KeyAction::InsertHyp { token, replace_on_commit } => {
-                self.insert_token(token, replace_on_commit);
+            KeyAction::InsertHyp { token, after_commit } => {
+                self.insert_token_mode(token, after_commit);
                 self.hyp = false;
             }
             KeyAction::Fraction { mixed } => self.insert_fraction(mixed),
@@ -1264,12 +1332,18 @@ impl ScientificView {
                         }
                     }
                     Some(Err(err)) => {
-                        let msg = format_error(lang, &err.kind);
+                        let prefix = match (lang, err.kind.category()) {
+                            (Lang::En, ErrorCategory::Syntax) => "Syntax ERROR",
+                            (Lang::En, ErrorCategory::Math) => "Math ERROR",
+                            (Lang::Ru, ErrorCategory::Syntax) => "Синтаксис",
+                            (Lang::Ru, ErrorCategory::Math) => "Мат. ошибка",
+                        };
+                        let msg = format!("{prefix}: {}", format_error(lang, &err.kind));
                         ui.painter().text(
                             Pos2::new(res_rect.right() - 4.0, res_rect.center().y),
                             Align2::RIGHT_CENTER,
                             msg,
-                            FontId::proportional((13.5 * scale).clamp(12.0, 18.0)),
+                            FontId::proportional((13.0 * scale).clamp(11.5, 17.5)),
                             palette.error,
                         );
                     }
@@ -1393,42 +1467,42 @@ impl ScientificView {
                     shift: KeyAction::Fraction { mixed: true },
                     tone: KeyTone::Sci,
                 },
-                KeySpec::sci("x⁻¹", "x!", ins("^(-1)", false), ins("!", false)),
-                KeySpec::sci("√", "∛", ins("sqrt(", true), ins("cbrt(", true)),
-                KeySpec::sci("x²", "x³", ins("²", false), ins("³", false)),
-                KeySpec::sci("xʸ", "ʸ√x", ins("^", false), ins("^(1/", false)),
-                KeySpec::sci("log", "10ˣ", ins("log(", true), ins("10^(", true)),
+                KeySpec::sci("x⁻¹", "x!", ins_chain("^(-1)"), ins_chain("!")),
+                KeySpec::sci("√", "∛", ins_new("sqrt("), ins_new("cbrt(")),
+                KeySpec::sci("x²", "x³", ins_chain("²"), ins_chain("³")),
+                KeySpec::sci("xʸ", "ʸ√x", ins_chain("^"), ins_chain("^(1/")),
+                KeySpec::sci("log", "10ˣ", ins_new("log("), ins_new("10^(")),
             ],
             [
-                KeySpec::sci("ln", "eˣ", ins("ln(", true), ins("exp(", true)),
-                KeySpec::sci("(-)", "Abs", ins("-", true), ins("abs(", true)),
+                KeySpec::sci("ln", "eˣ", ins_new("ln("), ins_new("exp(")),
+                KeySpec::sci("(-)", "Abs", ins_new("-"), ins_new("abs(")),
                 KeySpec::sci(
                     if hyp { "sinh" } else { "sin" },
                     if hyp { "sinh⁻¹" } else { "sin⁻¹" },
-                    if hyp { ins_hyp("sinh(", true) } else { ins("sin(", true) },
-                    if hyp { ins_hyp("asinh(", true) } else { ins("asin(", true) },
+                    if hyp { ins_hyp("sinh(") } else { ins_new("sin(") },
+                    if hyp { ins_hyp("asinh(") } else { ins_new("asin(") },
                 ),
                 KeySpec::sci(
                     if hyp { "cosh" } else { "cos" },
                     if hyp { "cosh⁻¹" } else { "cos⁻¹" },
-                    if hyp { ins_hyp("cosh(", true) } else { ins("cos(", true) },
-                    if hyp { ins_hyp("acosh(", true) } else { ins("acos(", true) },
+                    if hyp { ins_hyp("cosh(") } else { ins_new("cos(") },
+                    if hyp { ins_hyp("acosh(") } else { ins_new("acos(") },
                 ),
                 KeySpec::sci(
                     if hyp { "tanh" } else { "tan" },
                     if hyp { "tanh⁻¹" } else { "tan⁻¹" },
-                    if hyp { ins_hyp("tanh(", true) } else { ins("tan(", true) },
-                    if hyp { ins_hyp("atanh(", true) } else { ins("atan(", true) },
+                    if hyp { ins_hyp("tanh(") } else { ins_new("tan(") },
+                    if hyp { ins_hyp("atanh(") } else { ins_new("atan(") },
                 ),
-                KeySpec::sci("π", "e", ins("pi", true), ins("e", true)),
+                KeySpec::sci("π", "e", ins_new("pi"), ins_new("e")),
             ],
             [
-                KeySpec::sci("(", "%", ins("(", true), ins("%", false)),
-                KeySpec::sci(")", ",", ins(")", false), ins(", ", false)),
+                KeySpec::sci("(", "%", ins_new("("), ins_chain("%")),
+                KeySpec::sci(")", ",", ins_keep(")"), ins_keep(", ")),
                 KeySpec::sci("MC", "STO", KeyAction::MemClear, KeyAction::MemStore),
-                KeySpec::sci("MR", "φ", ins("M", true), ins("phi", true)),
-                KeySpec::sci("M-", "τ", KeyAction::MemAdd(-1), ins("tau", true)),
-                KeySpec::sci("M+", "log₂", KeyAction::MemAdd(1), ins("log2(", true)),
+                KeySpec::sci("MR", "φ", ins_new("M"), ins_new("phi")),
+                KeySpec::sci("M-", "τ", KeyAction::MemAdd(-1), ins_new("tau")),
+                KeySpec::sci("M+", "log₂", KeyAction::MemAdd(1), ins_new("log2(")),
             ],
         ];
 
@@ -1473,31 +1547,31 @@ impl ScientificView {
         let num_size = Vec2::new((avail_w - gap_x * 4.0) / 5.0, num_h);
         const NUM_ROWS: [[KeySpec; 5]; 4] = [
             [
-                KeySpec::num("7", "nPr", ins("7", true), ins("nPr(", true), KeyTone::Digit),
-                KeySpec::num("8", "nCr", ins("8", true), ins("nCr(", true), KeyTone::Digit),
-                KeySpec::num("9", "gcd", ins("9", true), ins("gcd(", true), KeyTone::Digit),
+                KeySpec::num("7", "nPr", ins_new("7"), ins_new("nPr("), KeyTone::Digit),
+                KeySpec::num("8", "nCr", ins_new("8"), ins_new("nCr("), KeyTone::Digit),
+                KeySpec::num("9", "gcd", ins_new("9"), ins_new("gcd("), KeyTone::Digit),
                 KeySpec::num("DEL", "", KeyAction::Backspace, KeyAction::Backspace, KeyTone::Danger),
                 KeySpec::num("AC", "", KeyAction::ClearAll, KeyAction::ClearAll, KeyTone::Danger),
             ],
             [
-                KeySpec::num("4", "lcm", ins("4", true), ins("lcm(", true), KeyTone::Digit),
-                KeySpec::num("5", "hypot", ins("5", true), ins("hypot(", true), KeyTone::Digit),
-                KeySpec::num("6", "round", ins("6", true), ins("round(", true), KeyTone::Digit),
-                KeySpec::num("×", "xʸ", ins(" * ", false), ins("^", false), KeyTone::Op),
-                KeySpec::num("÷", "mod", ins(" / ", false), ins(" mod ", false), KeyTone::Op),
+                KeySpec::num("4", "lcm", ins_new("4"), ins_new("lcm("), KeyTone::Digit),
+                KeySpec::num("5", "hypot", ins_new("5"), ins_new("hypot("), KeyTone::Digit),
+                KeySpec::num("6", "round", ins_new("6"), ins_new("round("), KeyTone::Digit),
+                KeySpec::num("×", "xʸ", ins_chain(" * "), ins_chain("^"), KeyTone::Op),
+                KeySpec::num("÷", "mod", ins_chain(" / "), ins_chain(" mod "), KeyTone::Op),
             ],
             [
-                KeySpec::num("1", "floor", ins("1", true), ins("floor(", true), KeyTone::Digit),
-                KeySpec::num("2", "ceil", ins("2", true), ins("ceil(", true), KeyTone::Digit),
-                KeySpec::num("3", "abs", ins("3", true), ins("abs(", true), KeyTone::Digit),
-                KeySpec::num("+", "min", ins(" + ", false), ins("min(", true), KeyTone::Op),
-                KeySpec::num("−", "max", ins(" - ", false), ins("max(", true), KeyTone::Op),
+                KeySpec::num("1", "floor", ins_new("1"), ins_new("floor("), KeyTone::Digit),
+                KeySpec::num("2", "ceil", ins_new("2"), ins_new("ceil("), KeyTone::Digit),
+                KeySpec::num("3", "abs", ins_new("3"), ins_new("abs("), KeyTone::Digit),
+                KeySpec::num("+", "min", ins_chain(" + "), ins_new("min("), KeyTone::Op),
+                KeySpec::num("−", "max", ins_chain(" - "), ins_new("max("), KeyTone::Op),
             ],
             [
-                KeySpec::num("0", "Rnd", ins("0", true), ins("round(", true), KeyTone::Digit),
-                KeySpec::num(".", "Ran#", ins(".", false), KeyAction::Random, KeyTone::Digit),
-                KeySpec::num("×10ˣ", "π", ins(" * 10^", false), ins("pi", true), KeyTone::Digit),
-                KeySpec::num("Ans", "%", ins("ans", true), ins("%", false), KeyTone::Op),
+                KeySpec::num("0", "Rnd", ins_new("0"), ins_new("round("), KeyTone::Digit),
+                KeySpec::num(".", "Ran#", ins_new("."), KeyAction::Random, KeyTone::Digit),
+                KeySpec::num("×10ˣ", "π", ins_chain(" * 10^"), ins_new("pi"), KeyTone::Digit),
+                KeySpec::num("Ans", "%", ins_new("Ans"), ins_chain("%"), KeyTone::Op),
                 KeySpec::num("=", "", KeyAction::Evaluate, KeyAction::Evaluate, KeyTone::Accent),
             ],
         ];
@@ -1653,6 +1727,62 @@ impl ScientificView {
 
 fn char_to_byte_idx(s: &str, char_idx: usize) -> usize {
     s.char_indices().nth(char_idx).map_or(s.len(), |(b, _)| b)
+}
+
+/// Returns the byte length of the atomic token immediately before the cursor so
+/// `DEL` removes multi-char tokens (`sin(`, `cos(`, `Ans`, `pi`, ` * 10^`, ` mod `, …)
+/// in a single keypress without corrupting the input string.
+fn smart_token_len_before(before: &str) -> usize {
+    const FIXED: &[&str] = &[
+        " * 10^",
+        "^(-1)",
+        " mod ",
+        "^(1/",
+        "10^(",
+        " + ",
+        " - ",
+        " * ",
+        " / ",
+        ", ",
+    ];
+    for tok in FIXED {
+        if before.ends_with(tok) {
+            return tok.len();
+        }
+    }
+
+    if let Some(stem) = before.strip_suffix('(') {
+        let mut start = stem.len();
+        for (b, c) in stem.char_indices().rev() {
+            if c.is_alphanumeric() || c == '_' {
+                start = b;
+            } else {
+                break;
+            }
+        }
+        // Handle implicit multiplication like `2sin(`: strip leading digits from candidate name.
+        let lead_digits = stem[start..].bytes().take_while(|b| b.is_ascii_digit()).count();
+        let name_start = start + lead_digits;
+        let name = &stem[name_start..];
+        if !name.is_empty() && lumina_core::eval::function(name).is_some() {
+            return before.len() - name_start;
+        }
+    }
+
+    const ATOMIC_IDENTS: &[&str] = &["Ans", "ans", "ANS", "tau", "phi", "pi"];
+    for ident in ATOMIC_IDENTS {
+        if let Some(prefix) = before.strip_suffix(ident) {
+            let boundary_ok = prefix
+                .chars()
+                .next_back()
+                .is_none_or(|c| !c.is_alphabetic() && c != '_');
+            if boundary_ok {
+                return ident.len();
+            }
+        }
+    }
+
+    before.chars().next_back().map_or(0, char::len_utf8)
 }
 
 /// Finds the byte index of the `(` matching the `)` at `close_byte`.
@@ -1943,13 +2073,81 @@ mod tests {
         v.evaluate_commit(8);
         assert!(v.committed);
 
-        // Postfix `%` after commit should append to existing expression, not erase it.
-        v.execute_key_action(ins("%", false), 8);
-        assert_eq!(v.expr, "20%");
+        // Postfix `%` after commit chains from `Ans` (`Ans%` = 0.2), just like Casio ClassWiz.
+        v.execute_key_action(ins_chain("%"), 8);
+        assert_eq!(v.expr, "Ans%");
+        let val = v.last_eval.as_ref().expect("eval").as_ref().expect("ok");
+        assert_eq!(val.plain(8), "0.2");
 
         v.evaluate_commit(8);
-        // Shifted prefix function `asin(` after commit should start a fresh expression.
-        v.execute_key_action(ins("asin(", true), 8);
+        // Shifted prefix function `asin(` after commit starts a fresh expression.
+        v.execute_key_action(ins_new("asin("), 8);
         assert_eq!(v.expr, "asin(");
+    }
+
+    #[test]
+    fn casio_ans_chain_after_equals() {
+        let mut v = ScientificView::default();
+        v.insert_token("2 + 3", true);
+        v.evaluate_commit(8);
+        assert_eq!(v.ans.as_ref().expect("ans").plain(8), "5");
+
+        // Binary operator `*` after `=` chains `Ans * `, so `2+3=` then `*4=` yields 20 (not 14).
+        v.execute_key_action(ins_chain(" * "), 8);
+        assert_eq!(v.expr, "Ans * ");
+        v.execute_key_action(ins_new("4"), 8);
+        v.evaluate_commit(8);
+        assert_eq!(v.ans.as_ref().expect("ans").plain(8), "20");
+
+        // Power operator `^` after `=` chains `Ans^`.
+        v.execute_key_action(ins_chain("^"), 8);
+        v.execute_key_action(ins_new("2"), 8);
+        v.evaluate_commit(8);
+        assert_eq!(v.ans.as_ref().expect("ans").plain(8), "400");
+
+        // Digit after `=` starts fresh.
+        v.execute_key_action(ins_new("7"), 8);
+        assert_eq!(v.expr, "7");
+    }
+
+    #[test]
+    fn casio_auto_closes_unclosed_parens_on_equals() {
+        let mut v = ScientificView::default();
+        assert_eq!(v.angle_unit, AngleUnit::Deg);
+        v.insert_token("sin(30", true);
+        // Live preview already evaluates auto-closed expression.
+        assert_eq!(v.last_eval.as_ref().expect("eval").as_ref().expect("ok").plain(8), "0.5");
+
+        v.evaluate_commit(8);
+        assert_eq!(v.expr, "sin(30)");
+        assert_eq!(v.ans.as_ref().expect("ans").plain(8), "0.5");
+
+        v.insert_token("2*(3+(4+1", true);
+        v.evaluate_commit(8);
+        assert_eq!(v.expr, "2*(3+(4+1))");
+        assert_eq!(v.ans.as_ref().expect("ans").plain(8), "16");
+    }
+
+    #[test]
+    fn smart_del_removes_multichar_tokens_atomically() {
+        let mut v = ScientificView::default();
+        v.insert_token("2sin(", true);
+        v.backspace();
+        assert_eq!(v.expr, "2");
+
+        v.insert_token("Ans", false);
+        assert_eq!(v.expr, "2Ans");
+        v.backspace();
+        assert_eq!(v.expr, "2");
+
+        v.insert_token(" * 10^", false);
+        v.backspace();
+        assert_eq!(v.expr, "2");
+
+        v.insert_token(" + asinh(", false);
+        v.backspace();
+        assert_eq!(v.expr, "2 + ");
+        v.backspace();
+        assert_eq!(v.expr, "2");
     }
 }
