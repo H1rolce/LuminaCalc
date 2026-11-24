@@ -6,6 +6,14 @@ use std::ops::Range;
 
 pub type Span = Range<usize>;
 
+/// High-level error classification matching scientific calculator conventions
+/// (`Syntax ERROR` vs `Math ERROR`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ErrorCategory {
+    Syntax,
+    Math,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum ErrorKind {
     #[error("unexpected character")]
@@ -48,6 +56,44 @@ pub enum ErrorKind {
     BadAssignment(String),
     #[error("invalid conversion target")]
     BadConversionTarget,
+}
+
+impl ErrorKind {
+    /// Classifies the error into [`ErrorCategory::Syntax`] or [`ErrorCategory::Math`].
+    #[inline]
+    pub const fn category(&self) -> ErrorCategory {
+        match self {
+            ErrorKind::UnexpectedChar
+            | ErrorKind::UnexpectedEnd
+            | ErrorKind::UnexpectedToken
+            | ErrorKind::UnclosedParen
+            | ErrorKind::InvalidNumber
+            | ErrorKind::UnknownIdent(_)
+            | ErrorKind::UnknownFunction(_)
+            | ErrorKind::Arity { .. }
+            | ErrorKind::BadAssignment(_)
+            | ErrorKind::BadConversionTarget => ErrorCategory::Syntax,
+
+            ErrorKind::DivisionByZero
+            | ErrorKind::Overflow
+            | ErrorKind::Domain
+            | ErrorKind::DimensionMismatch(_, _)
+            | ErrorKind::ExpectedDimensionless
+            | ErrorKind::ExpectedInteger
+            | ErrorKind::BadLineRef(_)
+            | ErrorKind::NoPrevious => ErrorCategory::Math,
+        }
+    }
+
+    #[inline]
+    pub const fn is_syntax(&self) -> bool {
+        matches!(self.category(), ErrorCategory::Syntax)
+    }
+
+    #[inline]
+    pub const fn is_math(&self) -> bool {
+        matches!(self.category(), ErrorCategory::Math)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
