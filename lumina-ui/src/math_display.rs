@@ -555,7 +555,7 @@ pub fn paint_interactive(
                 palette.syn_number
             } else if matches!(text.as_str(), "π" | "e" | "τ" | "φ") {
                 palette.syn_constant
-            } else if text == "ans" || text == "M" {
+            } else if matches!(text.as_str(), "ans" | "Ans" | "ANS" | "M") {
                 palette.syn_keyword
             } else {
                 palette.syn_function
