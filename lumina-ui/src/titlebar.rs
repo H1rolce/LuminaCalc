@@ -104,35 +104,43 @@ pub fn show_titlebar(
         Stroke::new(1.0, palette.border_subtle),
     );
 
+    // Match the horizontal outer padding of the main calculator card below.
+    let outer_pad = (bar_rect.width() * 0.018).clamp(14.0, 28.0);
+    let btn_y = bar_rect.center().y;
+    let ctrl_gap = 6.0f32;
+
     // ── Left: vector Lumina spark logo + app title (compact icon-only on narrow windows) ──
-    let show_brand_text = bar_rect.width() >= 780.0;
-    let brand_w = if show_brand_text { 118.0 } else { 30.0 };
+    let show_brand_text = bar_rect.width() >= 840.0;
+    let logo_r = 8.5f32;
+    let logo_center = Pos2::new(bar_rect.left() + outer_pad + logo_r, btn_y);
+    let brand_w = if show_brand_text { 112.0 } else { logo_r * 2.0 + 4.0 };
     let brand_rect = Rect::from_min_size(
-        Pos2::new(bar_rect.left() + 10.0, bar_rect.top() + 6.0),
+        Pos2::new(bar_rect.left() + outer_pad - 2.0, bar_rect.top() + 6.0),
         Vec2::new(brand_w, bar_h - 12.0),
     );
     ui.interact(brand_rect, Id::unique("tb_brand"), Sense::hover())
         .on_hover_text(s.hotkey_hint);
-    let logo_center = Pos2::new(bar_rect.left() + 24.0, bar_rect.center().y);
-    paint_lumina_logo(ui.painter(), logo_center, 8.5, palette);
+    paint_lumina_logo(ui.painter(), logo_center, logo_r, palette);
     if show_brand_text {
         ui.painter().text(
-            Pos2::new(bar_rect.left() + 40.0, bar_rect.center().y),
+            Pos2::new(logo_center.x + logo_r + 8.0, btn_y),
             egui::Align2::LEFT_CENTER,
             "LuminaCalc",
             FontId::proportional(14.0),
             palette.text_primary,
         );
     }
-    let left_limit = brand_rect.right() + 6.0;
+    let left_limit = brand_rect.right() + 10.0;
 
-    // ── Right: Theme, Language, Pin, Window Controls ──
-    let mut right_x = bar_rect.right() - 8.0;
-    let btn_y = bar_rect.center().y;
+    // ── Right: Theme, Language, Pin, Window Controls (uniform spacing & aligned right edge) ──
+    let mut right_x = bar_rect.right() - outer_pad;
 
     // Close button
-    let close_rect = Rect::from_center_size(Pos2::new(right_x - 16.0, btn_y), Vec2::new(30.0, 26.0));
-    right_x -= 34.0;
+    let close_rect = Rect::from_min_max(
+        Pos2::new(right_x - 30.0, btn_y - 13.0),
+        Pos2::new(right_x, btn_y + 13.0),
+    );
+    right_x = close_rect.left() - 4.0;
     if paint_win_button(ui, close_rect, Id::unique("win_close"), palette, true, |p, c, col| {
         let d = 4.5;
         p.line_segment([c + Vec2::new(-d, -d), c + Vec2::new(d, d)], Stroke::new(1.5, col));
@@ -142,8 +150,11 @@ pub fn show_titlebar(
     }
 
     // Maximize / Restore button
-    let max_rect = Rect::from_center_size(Pos2::new(right_x - 16.0, btn_y), Vec2::new(30.0, 26.0));
-    right_x -= 34.0;
+    let max_rect = Rect::from_min_max(
+        Pos2::new(right_x - 30.0, btn_y - 13.0),
+        Pos2::new(right_x, btn_y + 13.0),
+    );
+    right_x = max_rect.left() - 4.0;
     if paint_win_button(ui, max_rect, Id::unique("win_max"), palette, false, |p, c, col| {
         let sq = Rect::from_center_size(c, Vec2::splat(9.0));
         p.rect_stroke(sq, CornerRadius::same(1), Stroke::new(1.3, col), egui::StrokeKind::Inside);
@@ -152,8 +163,11 @@ pub fn show_titlebar(
     }
 
     // Minimize button
-    let min_rect = Rect::from_center_size(Pos2::new(right_x - 16.0, btn_y), Vec2::new(30.0, 26.0));
-    right_x -= 40.0;
+    let min_rect = Rect::from_min_max(
+        Pos2::new(right_x - 30.0, btn_y - 13.0),
+        Pos2::new(right_x, btn_y + 13.0),
+    );
+    right_x = min_rect.left() - 8.0;
     if paint_win_button(ui, min_rect, Id::unique("win_min"), palette, false, |p, c, col| {
         p.line_segment(
             [Pos2::new(c.x - 5.0, c.y + 1.0), Pos2::new(c.x + 5.0, c.y + 1.0)],
@@ -168,11 +182,14 @@ pub fn show_titlebar(
         [Pos2::new(right_x, bar_rect.top() + 12.0), Pos2::new(right_x, bar_rect.bottom() - 12.0)],
         Stroke::new(1.0, palette.border_subtle),
     );
-    right_x -= 10.0;
+    right_x -= 9.0;
 
     // Pin (Always on top)
-    let pin_rect = Rect::from_center_size(Pos2::new(right_x - 14.0, btn_y), Vec2::new(28.0, 26.0));
-    right_x -= 34.0;
+    let pin_rect = Rect::from_min_max(
+        Pos2::new(right_x - 28.0, btn_y - 13.0),
+        Pos2::new(right_x, btn_y + 13.0),
+    );
+    right_x = pin_rect.left() - ctrl_gap;
     let pin_resp = ui.interact(pin_rect, Id::unique("tb_pin"), Sense::click()).on_hover_text(s.pin_tooltip);
     let pin_hover = ui.ctx().animate_bool_with_time(pin_resp.id, pin_resp.hovered(), 0.10);
     let pin_bg = if always_on_top {
@@ -200,8 +217,11 @@ pub fn show_titlebar(
     }
 
     // Language toggle pill (RU / EN)
-    let lang_rect = Rect::from_center_size(Pos2::new(right_x - 18.0, btn_y), Vec2::new(36.0, 26.0));
-    right_x -= 42.0;
+    let lang_rect = Rect::from_min_max(
+        Pos2::new(right_x - 34.0, btn_y - 13.0),
+        Pos2::new(right_x, btn_y + 13.0),
+    );
+    right_x = lang_rect.left() - ctrl_gap;
     let lang_resp = ui.interact(lang_rect, Id::unique("tb_lang"), Sense::click()).on_hover_text(s.lang_tooltip);
     let lang_hover = ui.ctx().animate_bool_with_time(lang_resp.id, lang_resp.hovered(), 0.10);
     ui.painter().rect(
@@ -222,9 +242,21 @@ pub fn show_titlebar(
         action.lang_toggled = true;
     }
 
-    // Theme selector pill (color dot + name)
-    let theme_w = 82.0;
-    let theme_rect = Rect::from_center_size(Pos2::new(right_x - theme_w * 0.5, btn_y), Vec2::new(theme_w, 26.0));
+    // Theme selector pill (color dot + label, measured for symmetrical inner padding)
+    let theme_label = theme.label(lang);
+    let theme_font = FontId::proportional(11.5);
+    let theme_galley = ui
+        .painter()
+        .layout_no_wrap(theme_label.to_owned(), theme_font, palette.text_primary);
+    let dot_r = 3.8f32;
+    let dot_gap = 6.0f32;
+    let theme_pad_x = 10.0f32;
+    let theme_content_w = dot_r * 2.0 + dot_gap + theme_galley.size().x;
+    let theme_w = (theme_content_w + theme_pad_x * 2.0).max(68.0);
+    let theme_rect = Rect::from_min_max(
+        Pos2::new(right_x - theme_w, btn_y - 13.0),
+        Pos2::new(right_x, btn_y + 13.0),
+    );
     let theme_resp = ui.interact(theme_rect, Id::unique("tb_theme"), Sense::click()).on_hover_text(s.theme_tooltip);
     let theme_hover = ui.ctx().animate_bool_with_time(theme_resp.id, theme_resp.hovered(), 0.10);
     ui.painter().rect(
@@ -234,20 +266,22 @@ pub fn show_titlebar(
         Stroke::new(1.0, palette.border_subtle),
         egui::StrokeKind::Inside,
     );
-    ui.painter().circle_filled(Pos2::new(theme_rect.left() + 12.0, btn_y), 4.0, palette.accent);
-    ui.painter().text(
-        Pos2::new(theme_rect.left() + 22.0, btn_y),
-        egui::Align2::LEFT_CENTER,
-        theme.label(lang),
-        FontId::proportional(11.5),
+    let content_left = theme_rect.center().x - theme_content_w * 0.5;
+    ui.painter().circle_filled(Pos2::new(content_left + dot_r, btn_y), dot_r, palette.accent);
+    ui.painter().galley(
+        Pos2::new(
+            content_left + dot_r * 2.0 + dot_gap,
+            btn_y - theme_galley.size().y * 0.5,
+        ),
+        theme_galley,
         palette.text_primary,
     );
     if theme_resp.clicked() {
         action.theme_cycled = true;
     }
-    let right_limit = theme_rect.left() - 8.0;
+    let right_limit = theme_rect.left() - 10.0;
 
-    // ── Center: segmented tab control (clamped cleanly between brand and right controls) ──
+    // ── Center: proportional segmented tab control, symmetrically centered in available span ──
     let tabs = [
         (ActiveTab::Notebook, s.tab_notebook),
         (ActiveTab::Scientific, s.tab_scientific),
@@ -256,15 +290,57 @@ pub fn show_titlebar(
     ];
     let tab_h = 28.0f32;
     let pad = 3.0f32;
+    let tab_gap = 2.0f32;
     let avail_tabs_w = (right_limit - left_limit).max(160.0);
-    let tab_w = ((avail_tabs_w - pad * 2.0) / tabs.len() as f32).clamp(56.0, 96.0);
-    let tab_fs = if tab_w < 84.0 { 11.5 } else { 13.0 };
-    let group_w = tab_w * tabs.len() as f32 + pad * 2.0;
+
+    // Pick crisp font size & symmetrical per-tab horizontal padding so every label fits cleanly.
+    let mut tab_fs = 13.0f32;
+    let mut text_ws = [0.0f32; 4];
+    for (i, (_, lbl)) in tabs.iter().enumerate() {
+        text_ws[i] = ui
+            .painter()
+            .layout_no_wrap((*lbl).to_owned(), FontId::proportional(tab_fs), palette.text_primary)
+            .size()
+            .x;
+    }
+    let min_needed = text_ws.iter().sum::<f32>() + 4.0 * 18.0 + tab_gap * 3.0 + pad * 2.0;
+    if min_needed > avail_tabs_w {
+        tab_fs = 12.0;
+        for (i, (_, lbl)) in tabs.iter().enumerate() {
+            text_ws[i] = ui
+                .painter()
+                .layout_no_wrap((*lbl).to_owned(), FontId::proportional(tab_fs), palette.text_primary)
+                .size()
+                .x;
+        }
+    }
+
+    let text_sum: f32 = text_ws.iter().sum();
+    let max_pad_per_tab = ((avail_tabs_w - pad * 2.0 - tab_gap * 3.0 - text_sum) / 8.0).max(5.0);
+    let h_pad = max_pad_per_tab.clamp(6.0, 14.0);
+
+    let mut tab_ws = [0.0f32; 4];
+    let mut tab_offsets = [0.0f32; 4];
+    let mut cursor_x = 0.0f32;
+    for i in 0..4 {
+        tab_offsets[i] = cursor_x;
+        tab_ws[i] = text_ws[i] + h_pad * 2.0;
+        cursor_x += tab_ws[i] + if i < 3 { tab_gap } else { 0.0 };
+    }
+
+    let group_w = cursor_x + pad * 2.0;
     let group_h = tab_h + pad * 2.0;
-    let ideal_left = bar_rect.center().x - group_w * 0.5;
-    let clamped_left = ideal_left.clamp(left_limit, (right_limit - group_w).max(left_limit));
+
+    // Prefer true window center when both sides keep comfortable clearance; otherwise center
+    // symmetrically inside `[left_limit, right_limit]` so left and right gaps are strictly equal.
+    let win_centered_left = bar_rect.center().x - group_w * 0.5;
+    let group_left = if win_centered_left >= left_limit && win_centered_left + group_w <= right_limit {
+        win_centered_left
+    } else {
+        (0.5 * (left_limit + right_limit) - group_w * 0.5).max(left_limit)
+    };
     let group_rect = Rect::from_min_size(
-        Pos2::new(clamped_left, bar_rect.center().y - group_h * 0.5),
+        Pos2::new(group_left, btn_y - group_h * 0.5),
         Vec2::new(group_w, group_h),
     );
 
@@ -276,12 +352,15 @@ pub fn show_titlebar(
         egui::StrokeKind::Inside,
     );
 
-    let active_idx = tabs.iter().position(|(t, _)| *t == tab).unwrap_or(0) as f32;
-    let anim_idx = ui.ctx().animate_value_with_time(Id::unique("lumina_tab_slide"), active_idx, 0.16);
+    let active_idx = tabs.iter().position(|(t, _)| *t == tab).unwrap_or(0);
+    let target_x = tab_offsets[active_idx];
+    let target_w = tab_ws[active_idx];
+    let anim_x = ui.ctx().animate_value_with_time(Id::unique("lumina_tab_x"), target_x, 0.16);
+    let anim_w = ui.ctx().animate_value_with_time(Id::unique("lumina_tab_w"), target_w, 0.16);
 
     let indicator_rect = Rect::from_min_size(
-        Pos2::new(group_rect.left() + pad + anim_idx * tab_w, group_rect.top() + pad),
-        Vec2::new(tab_w, tab_h),
+        Pos2::new(group_rect.left() + pad + anim_x, group_rect.top() + pad),
+        Vec2::new(anim_w, tab_h),
     );
     ui.painter().rect(
         indicator_rect,
@@ -293,8 +372,8 @@ pub fn show_titlebar(
 
     for (i, (t, label)) in tabs.iter().enumerate() {
         let r = Rect::from_min_size(
-            Pos2::new(group_rect.left() + pad + i as f32 * tab_w, group_rect.top() + pad),
-            Vec2::new(tab_w, tab_h),
+            Pos2::new(group_rect.left() + pad + tab_offsets[i], group_rect.top() + pad),
+            Vec2::new(tab_ws[i], tab_h),
         );
         let resp = ui.interact(r, Id::unique(("lumina_tab", i)), Sense::click());
         let is_active = *t == tab;
