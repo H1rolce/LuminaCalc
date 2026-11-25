@@ -286,4 +286,59 @@ avg
         assert_eq!(nb.lines()[1].byte_start, "а = 5\r\n".len());
         assert_eq!(nb.lines()[1].output.value().map(|v| v.plain(4)).as_deref(), Some("10"));
     }
+
+    #[test]
+    fn filled_notebook_many_lines_refs_utf8_and_errors() {
+        let mut lines = vec![
+            "# Physics & Unit Conversions".to_owned(),
+            "dist = 420 km".to_owned(),
+            "speed = 120 km/h".to_owned(),
+            "speed in m/s".to_owned(),
+            "time = dist / speed in min".to_owned(),
+            String::new(),
+            "# Точная арифметика и кириллица".to_owned(),
+            "цена = 2490".to_owned(),
+            "цена - 15%".to_owned(),
+            "20% от цена".to_owned(),
+            "r = 5 см".to_owned(),
+            "area = pi * r² в см²".to_owned(),
+            "sin(30°) + cos(60°)".to_owned(),
+            String::new(),
+            "120".to_owned(),
+            "340".to_owned(),
+            "540".to_owned(),
+            "sum".to_owned(),
+            "avg".to_owned(),
+            "#18 + #19".to_owned(),
+            "#999 + 1".to_owned(),
+            "sin(".to_owned(),
+            "1 / 0".to_owned(),
+            "22 °C in °F".to_owned(),
+            "1/3 K in °C".to_owned(),
+            "(0xFF << 4) | 0x0A in hex".to_owned(),
+            "1 GiB in MB".to_owned(),
+            String::new(),
+        ];
+        for i in 1..=50 {
+            lines.push(format!("v{i} = ({i} * 1.5 + 1/3) * 2"));
+        }
+        lines.push("sum".to_owned());
+        lines.push("avg".to_owned());
+        lines.push(format!("#{} + #{}", lines.len() - 1, lines.len()));
+
+        let doc = lines.join("\n");
+        let mut nb = Notebook::from_text(&doc);
+        assert_eq!(nb.lines().len(), lines.len());
+        assert!(nb.lines()[12].output.value().is_some());
+        assert!(nb.lines()[19].output.value().is_some());
+        assert!(nb.lines()[20].output.error().is_some());
+        assert!(nb.lines()[21].output.error().is_some());
+        assert!(nb.lines()[22].output.error().is_some());
+        assert!(nb.lines()[23].output.value().is_some());
+        assert!(nb.lines().last().and_then(|l| l.output.value()).is_some());
+
+        let crlf_doc = lines.join("\r\n");
+        assert!(nb.sync(&crlf_doc));
+        assert_eq!(nb.lines().len(), lines.len());
+    }
 }

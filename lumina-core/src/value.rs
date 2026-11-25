@@ -37,7 +37,7 @@ impl UnitHint {
             self.parts
                 .iter()
                 .filter(|p| filter(p.1))
-                .map(|(a, e)| format!("{a}{}", superscript(if neg { -e } else { *e })))
+                .map(|(a, e)| format!("{a}{}", superscript(if neg { e.saturating_neg() } else { *e })))
                 .collect::<Vec<_>>()
                 .join("·")
         };
@@ -124,12 +124,15 @@ impl Value {
         let res = match &self.unit {
             Some(h) if !h.factor.is_zero() => {
                 let v = self.si.checked_div(h.factor).unwrap_or(self.si);
-                let res = v - h.offset;
-                if !h.offset.is_zero() {
-                    let eps = Decimal::new(1, 22) * h.offset.abs().max(Decimal::ONE);
-                    if res.abs() < eps {
-                        return Decimal::ZERO;
-                    }
+                let res = v
+                    .checked_sub(h.offset)
+                    .or_else(|| v.round_dp(20).checked_sub(h.offset))
+                    .unwrap_or(v);
+                if !h.offset.is_zero()
+                    && let Some(eps) = Decimal::new(1, 22).checked_mul(h.offset.abs().max(Decimal::ONE))
+                    && res.abs() < eps
+                {
+                    return Decimal::ZERO;
                 }
                 res
             }
@@ -191,15 +194,16 @@ impl Default for FormatOptions {
 const SCI_HIGH: Decimal = Decimal::from_parts(0xA4C6_8000, 0x0003_8D7E, 0, false, 0);
 
 pub fn format_decimal(d: Decimal, opts: &FormatOptions) -> String {
+    let prec = opts.precision.min(28);
     let abs = d.abs();
     if !abs.is_zero() {
-        let tiny = Decimal::new(1, opts.precision.min(28));
+        let tiny = Decimal::new(1, prec);
         if abs >= SCI_HIGH || abs < tiny {
-            return format_sci(d, opts.precision.min(12));
+            return format_sci(d, prec.min(12));
         }
     }
     let r = d
-        .round_dp_with_strategy(opts.precision, RoundingStrategy::MidpointAwayFromZero)
+        .round_dp_with_strategy(prec, RoundingStrategy::MidpointAwayFromZero)
         .normalize();
     if r.is_zero() {
         return "0".to_owned();

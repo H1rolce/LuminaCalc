@@ -97,9 +97,11 @@ impl PaintFeedback {
     }
 }
 
+const MAX_MATH_DEPTH: usize = 48;
+
 pub fn parse_math(src: &str) -> MathNode {
     let tokens = tokenize_math(src);
-    let mut p = MathParser { toks: &tokens, pos: 0, src_len: src.len() };
+    let mut p = MathParser { toks: &tokens, pos: 0, src_len: src.len(), depth: 0 };
     p.parse_seq(false, 0)
 }
 
@@ -139,8 +141,12 @@ fn tokenize_math(src: &str) -> Vec<MTok> {
                 out.push(MTok { kind: MTokKind::Slot, span: byte_start..byte_end });
                 i += 1;
             }
-            '/' | '÷' => {
+            '/' => {
                 out.push(MTok { kind: MTokKind::Slash, span: byte_start..byte_end });
+                i += 1;
+            }
+            '÷' => {
+                out.push(MTok { kind: MTokKind::Op("÷".into()), span: byte_start..byte_end });
                 i += 1;
             }
             '^' => {
@@ -233,6 +239,7 @@ struct MathParser<'a> {
     toks: &'a [MTok],
     pos: usize,
     src_len: usize,
+    depth: usize,
 }
 
 impl MathParser<'_> {
@@ -367,8 +374,13 @@ impl MathParser<'_> {
         match tok.kind {
             MTokKind::Slot => MathNode::Slot { byte_pos: tok.span.start, span: tok.span },
             MTokKind::LParen => {
+                if self.depth >= MAX_MATH_DEPTH {
+                    return MathNode::Text { text: "(".into(), span: tok.span };
+                }
+                self.depth += 1;
                 let inner_start = tok.span.end;
                 let inner = self.parse_seq(true, inner_start);
+                self.depth -= 1;
                 let (end, closed) = if self.peek().is_some_and(|t| t.kind == MTokKind::RParen) {
                     (self.bump().map_or(inner.span().end, |t| t.span.end), true)
                 } else {
@@ -377,10 +389,15 @@ impl MathParser<'_> {
                 MathNode::Paren { inner: Box::new(inner), closed, span: tok.span.start..end }
             }
             MTokKind::Atom(word) => {
-                if word == "sqrt" && self.peek().is_some_and(|t| t.kind == MTokKind::LParen) {
+                if word == "sqrt"
+                    && self.depth < MAX_MATH_DEPTH
+                    && self.peek().is_some_and(|t| t.kind == MTokKind::LParen)
+                {
                     let lp = self.bump();
                     let inner_start = lp.map_or(tok.span.end, |t| t.span.end);
+                    self.depth += 1;
                     let inner = self.parse_seq(true, inner_start);
+                    self.depth -= 1;
                     let end = if self.peek().is_some_and(|t| t.kind == MTokKind::RParen) {
                         self.bump().map_or(inner.span().end, |t| t.span.end)
                     } else {
@@ -410,6 +427,13 @@ fn unwrap_paren(node: MathNode) -> MathNode {
 }
 
 pub fn measure(node: &MathNode, painter: &Painter, font_size: f32) -> Metrics {
+    measure_depth(node, painter, font_size, 0)
+}
+
+fn measure_depth(node: &MathNode, painter: &Painter, font_size: f32, depth: usize) -> Metrics {
+    if depth >= MAX_MATH_DEPTH {
+        return Metrics { width: font_size * 0.6, above: font_size * 0.55, below: font_size * 0.55 };
+    }
     match node {
         MathNode::Seq { items, .. } => {
             let mut w = 0.0f32;
@@ -419,7 +443,7 @@ pub fn measure(node: &MathNode, painter: &Painter, font_size: f32) -> Metrics {
                 if i > 0 {
                     w += font_size * 0.14;
                 }
-                let m = measure(item, painter, font_size);
+                let m = measure_depth(item, painter, font_size, depth + 1);
                 w += m.width;
                 above = above.max(m.above);
                 below = below.max(m.below);
@@ -446,8 +470,8 @@ pub fn measure(node: &MathNode, painter: &Painter, font_size: f32) -> Metrics {
         }
         MathNode::Frac { num, den, .. } => {
             let sub_fs = (font_size * 0.78).max(7.5);
-            let mn = measure(num, painter, sub_fs);
-            let md = measure(den, painter, sub_fs);
+            let mn = measure_depth(num, painter, sub_fs, depth + 1);
+            let md = measure_depth(den, painter, sub_fs, depth + 1);
             let pad_x = (font_size * 0.28).max(3.0);
             let gap = (font_size * 0.14).max(1.8);
             Metrics {
@@ -457,9 +481,9 @@ pub fn measure(node: &MathNode, painter: &Painter, font_size: f32) -> Metrics {
             }
         }
         MathNode::Sup { base, exp, .. } => {
-            let mb = measure(base, painter, font_size);
+            let mb = measure_depth(base, painter, font_size, depth + 1);
             let exp_fs = (font_size * 0.65).max(7.5);
-            let me = measure(exp, painter, exp_fs);
+            let me = measure_depth(exp, painter, exp_fs, depth + 1);
             let lift = mb.above * 0.55;
             Metrics {
                 width: mb.width + me.width + 1.5,
@@ -468,7 +492,7 @@ pub fn measure(node: &MathNode, painter: &Painter, font_size: f32) -> Metrics {
             }
         }
         MathNode::Sqrt { inner, .. } => {
-            let mi = measure(inner, painter, font_size);
+            let mi = measure_depth(inner, painter, font_size, depth + 1);
             let hook_w = font_size * 0.65;
             let top_pad = (font_size * 0.14).max(2.0);
             Metrics {
@@ -478,7 +502,7 @@ pub fn measure(node: &MathNode, painter: &Painter, font_size: f32) -> Metrics {
             }
         }
         MathNode::Paren { inner, .. } => {
-            let mi = measure(inner, painter, font_size);
+            let mi = measure_depth(inner, painter, font_size, depth + 1);
             let pw = (font_size * 0.42).max(7.0);
             Metrics {
                 width: mi.width + pw * 2.0,
@@ -501,6 +525,36 @@ pub fn paint_interactive(
     palette: &Palette,
     fb: &mut PaintFeedback,
 ) -> Metrics {
+    paint_interactive_depth(
+        node,
+        painter,
+        left_x,
+        mid_y,
+        font_size,
+        cursor_byte,
+        hover_pos,
+        palette,
+        fb,
+        0,
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+fn paint_interactive_depth(
+    node: &MathNode,
+    painter: &Painter,
+    left_x: f32,
+    mid_y: f32,
+    font_size: f32,
+    cursor_byte: usize,
+    hover_pos: Option<Pos2>,
+    palette: &Palette,
+    fb: &mut PaintFeedback,
+    depth: usize,
+) -> Metrics {
+    if depth >= MAX_MATH_DEPTH {
+        return Metrics { width: font_size * 0.6, above: font_size * 0.55, below: font_size * 0.55 };
+    }
     match node {
         MathNode::Seq { items, .. } => {
             let mut x = left_x;
@@ -510,7 +564,7 @@ pub fn paint_interactive(
                 if i > 0 {
                     x += font_size * 0.14;
                 }
-                let m = paint_interactive(
+                let m = paint_interactive_depth(
                     item,
                     painter,
                     x,
@@ -520,6 +574,7 @@ pub fn paint_interactive(
                     hover_pos,
                     palette,
                     fb,
+                    depth + 1,
                 );
                 x += m.width;
                 above = above.max(m.above);
@@ -720,7 +775,18 @@ pub fn paint_interactive(
 
             let num_x = left_x + (total_w - mn.width) * 0.5;
             let num_mid_y = mid_y - gap - mn.below;
-            paint_interactive(num, painter, num_x, num_mid_y, sub_fs, cursor_byte, hover_pos, palette, fb);
+            paint_interactive_depth(
+                num,
+                painter,
+                num_x,
+                num_mid_y,
+                sub_fs,
+                cursor_byte,
+                hover_pos,
+                palette,
+                fb,
+                depth + 1,
+            );
 
             let bar_thick = (font_size * 0.085).clamp(1.2, 2.5);
             let bar_col = if num_contains_cursor || den_contains_cursor {
@@ -738,7 +804,18 @@ pub fn paint_interactive(
 
             let den_x = left_x + (total_w - md.width) * 0.5;
             let den_mid_y = mid_y + gap + md.above;
-            paint_interactive(den, painter, den_x, den_mid_y, sub_fs, cursor_byte, hover_pos, palette, fb);
+            paint_interactive_depth(
+                den,
+                painter,
+                den_x,
+                den_mid_y,
+                sub_fs,
+                cursor_byte,
+                hover_pos,
+                palette,
+                fb,
+                depth + 1,
+            );
 
             if cursor_byte == span.start && fb.caret.is_none() {
                 fb.caret = Some(CaretPos {
@@ -761,11 +838,22 @@ pub fn paint_interactive(
             }
         }
         MathNode::Sup { base, exp, span } => {
-            let mb = paint_interactive(base, painter, left_x, mid_y, font_size, cursor_byte, hover_pos, palette, fb);
+            let mb = paint_interactive_depth(
+                base,
+                painter,
+                left_x,
+                mid_y,
+                font_size,
+                cursor_byte,
+                hover_pos,
+                palette,
+                fb,
+                depth + 1,
+            );
             let exp_fs = (font_size * 0.65).max(7.5);
-            let me = measure(exp, painter, exp_fs);
+            let me = measure_depth(exp, painter, exp_fs, depth + 1);
             let lift = mb.above * 0.55;
-            paint_interactive(
+            paint_interactive_depth(
                 exp,
                 painter,
                 left_x + mb.width + 1.5,
@@ -775,6 +863,7 @@ pub fn paint_interactive(
                 hover_pos,
                 palette,
                 fb,
+                depth + 1,
             );
             if cursor_byte == span.end && fb.caret.is_none() {
                 fb.caret = Some(CaretPos {
@@ -790,7 +879,7 @@ pub fn paint_interactive(
             }
         }
         MathNode::Sqrt { inner, span } => {
-            let mi = measure(inner, painter, font_size);
+            let mi = measure_depth(inner, painter, font_size, depth + 1);
             let hook_w = font_size * 0.65;
             let top_pad = (font_size * 0.14).max(2.0);
             let top_y = mid_y - mi.above - top_pad;
@@ -805,7 +894,18 @@ pub fn paint_interactive(
             ];
             painter.add(egui::Shape::line(pts, stroke));
 
-            paint_interactive(inner, painter, left_x + hook_w, mid_y, font_size, cursor_byte, hover_pos, palette, fb);
+            paint_interactive_depth(
+                inner,
+                painter,
+                left_x + hook_w,
+                mid_y,
+                font_size,
+                cursor_byte,
+                hover_pos,
+                palette,
+                fb,
+                depth + 1,
+            );
             if cursor_byte == span.end && fb.caret.is_none() {
                 fb.caret = Some(CaretPos {
                     x: left_x + hook_w + mi.width + 3.5,
@@ -820,7 +920,7 @@ pub fn paint_interactive(
             }
         }
         MathNode::Paren { inner, closed, span } => {
-            let mi = measure(inner, painter, font_size);
+            let mi = measure_depth(inner, painter, font_size, depth + 1);
             let pw = (font_size * 0.42).max(7.0);
             let top_y = mid_y - mi.above - 1.0;
             let bot_y = mid_y + mi.below + 1.0;
@@ -833,7 +933,18 @@ pub fn paint_interactive(
             };
 
             paint_paren_curve(painter, left_x + pw * 0.72, top_y, bot_y, -pw * 0.45, open_stroke);
-            paint_interactive(inner, painter, left_x + pw, mid_y, font_size, cursor_byte, hover_pos, palette, fb);
+            paint_interactive_depth(
+                inner,
+                painter,
+                left_x + pw,
+                mid_y,
+                font_size,
+                cursor_byte,
+                hover_pos,
+                palette,
+                fb,
+                depth + 1,
+            );
             paint_paren_curve(painter, left_x + pw + mi.width + pw * 0.28, top_y, bot_y, pw * 0.45, close_stroke);
 
             fb.hits.push(HitZone {
@@ -889,6 +1000,9 @@ pub fn paint_stacked_fraction_result(
     let sign = if num < 0 { "−" } else { "" };
     let abs_n = num.unsigned_abs();
     let abs_d = den.unsigned_abs();
+    if abs_d == 0 {
+        return;
+    }
 
     let (whole_opt, rem_n) = if mixed && abs_n > abs_d {
         (Some(abs_n / abs_d), abs_n % abs_d)

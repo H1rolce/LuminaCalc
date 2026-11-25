@@ -133,8 +133,6 @@ impl LuminaApp {
     }
 
     fn handle_shortcuts(&mut self, ctx: &Context) {
-        let mut cycle_theme = false;
-        let mut toggle_lang = false;
         let mut next_tab: Option<ActiveTab> = None;
         let mut font_delta = 0.0f32;
 
@@ -149,10 +147,6 @@ impl LuminaApp {
                     next_tab = Some(ActiveTab::Plotter);
                 } else if i.key_pressed(Key::Num4) {
                     next_tab = Some(ActiveTab::Programmer);
-                } else if i.key_pressed(Key::T) {
-                    cycle_theme = true;
-                } else if i.key_pressed(Key::L) {
-                    toggle_lang = true;
                 } else if i.key_pressed(Key::Equals) || i.key_pressed(Key::Plus) {
                     font_delta = 1.0;
                 } else if i.key_pressed(Key::Minus) {
@@ -166,12 +160,6 @@ impl LuminaApp {
         {
             self.tab = t;
             self.mark_dirty();
-        }
-        if cycle_theme {
-            self.cycle_theme(ctx);
-        }
-        if toggle_lang {
-            self.toggle_lang();
         }
         if font_delta != 0.0 {
             self.font_size = (self.font_size + font_delta).clamp(11.0, 26.0);

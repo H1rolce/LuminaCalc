@@ -3,7 +3,7 @@ use crate::style::{self, Palette, ThemeId};
 use egui::text::LayoutJob;
 use egui::{
     Align2, Color32, CornerRadius, CursorIcon, FontId, Frame, Galley, Id, Margin, Pos2, Rect,
-    ScrollArea, Sense, Shape, Stroke, TextEdit, Ui, Vec2,
+    ScrollArea, Sense, Shape, Stroke, TextEdit, Ui,
 };
 use lumina_core::{FormatOptions, LineOutput, Notebook};
 use std::sync::Arc;
@@ -311,9 +311,15 @@ impl NotebookView {
                         continue;
                     };
 
+                    let res_left = divider_x + 8.0;
+                    let res_right = (scroll_top_left.x + total_w - 10.0).max(res_left);
                     let res_rect = Rect::from_min_max(
-                        Pos2::new(divider_x + 8.0, y0 - 1.0),
-                        Pos2::new(scroll_top_left.x + total_w - 10.0, y1 + 1.0),
+                        Pos2::new(res_left, y0 - 1.0),
+                        Pos2::new(res_right, y1 + 1.0),
+                    );
+                    let text_clip = Rect::from_min_max(
+                        Pos2::new((res_rect.left() + 6.0).min(res_rect.right()), res_rect.top()),
+                        Pos2::new((res_rect.right() - 6.0).max(res_rect.left()), res_rect.bottom()),
                     );
 
                     match &line.output {
@@ -363,7 +369,7 @@ impl NotebookView {
                                 palette.success
                             };
 
-                            let clipped = ui.painter().with_clip_rect(res_rect.shrink2(Vec2::new(6.0, 0.0)));
+                            let clipped = ui.painter().with_clip_rect(text_clip);
                             clipped.text(
                                 Pos2::new(res_rect.right() - 8.0, y_center),
                                 Align2::RIGHT_CENTER,
@@ -420,7 +426,7 @@ impl NotebookView {
                                 );
                             }
 
-                            let clipped = ui.painter().with_clip_rect(res_rect.shrink2(Vec2::new(6.0, 0.0)));
+                            let clipped = ui.painter().with_clip_rect(text_clip);
                             clipped.text(
                                 Pos2::new(res_rect.right() - 8.0, y_center),
                                 Align2::RIGHT_CENTER,
@@ -529,5 +535,154 @@ impl NotebookView {
                 });
             });
         text_changed
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn filled_doc() -> String {
+        let base = "\
+# Physics & Unit Conversions
+dist = 420 km
+speed = 120 km/h
+speed in m/s
+time = dist / speed in min
+
+# Exact Decimal & Percentages
+0.1 + 0.2
+price = 2490
+price - 15%
+20% of price
+
+# Geometry & Constants
+r = 5 cm
+area = pi * r^2 in cm^2
+sin(30°) + cos(60°)
+
+# Block Aggregates & Line Refs
+120
+340
+540
+sum
+avg
+#22 + #23
+
+# Programmer & Data
+(0xFF << 4) | 0x0A in hex
+1 GiB in MB
+22 °C in °F
+# Кириллица и ошибки
+ошибка = 1 +
+1 / 0
+#999 + 5
+1/3 K in °C";
+        let mut out = String::from(base);
+        for i in 0..45 {
+            out.push_str(&format!("\nстрока_{i} = ({i} + 1) * 2.5 + sin(30°)"));
+        }
+        out.push_str("\nsum\navg\n");
+        out
+    }
+
+    #[test]
+    fn filled_notebook_renders_scrolls_and_resizes_without_panic() {
+        let ctx = egui::Context::default();
+        style::install_fonts(&ctx);
+        let palette = style::apply_theme(&ctx, ThemeId::Dark);
+        let mut view = NotebookView::new(filled_doc());
+        let mut precision = 8u32;
+
+        for (w, h) in [(1040.0, 680.0), (680.0, 440.0), (320.0, 260.0), (1040.0, 680.0)] {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::Vec2::new(w, h))),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let _ = view.show(ui, ThemeId::Dark, Lang::Ru, 15.0, &mut precision, &palette);
+                });
+            });
+            out.textures_delta.clear();
+        }
+
+        view.append_line("22 °C in °F");
+        view.append_line("sin(30°");
+        let click_input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::Vec2::new(900.0, 600.0))),
+            events: vec![
+                egui::Event::PointerMoved(Pos2::new(160.0, 140.0)),
+                egui::Event::PointerButton {
+                    pos: Pos2::new(160.0, 140.0),
+                    button: egui::PointerButton::Primary,
+                    pressed: true,
+                    modifiers: egui::Modifiers::NONE,
+                },
+                egui::Event::PointerButton {
+                    pos: Pos2::new(160.0, 140.0),
+                    button: egui::PointerButton::Primary,
+                    pressed: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(click_input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let _ = view.show(ui, ThemeId::Light, Lang::En, 15.0, &mut precision, &palette);
+            });
+        });
+        out.textures_delta.clear();
+
+        let type_input = egui::RawInput {
+            screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::Vec2::new(900.0, 600.0))),
+            events: vec![
+                egui::Event::Text(" + 2² + π".to_owned()),
+                egui::Event::Key {
+                    key: egui::Key::Enter,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+                egui::Event::Key {
+                    key: egui::Key::Backspace,
+                    physical_key: None,
+                    pressed: true,
+                    repeat: false,
+                    modifiers: egui::Modifiers::NONE,
+                },
+            ],
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(type_input, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let _ = view.show(ui, ThemeId::Dark, Lang::Ru, 15.0, &mut precision, &palette);
+            });
+        });
+        out.textures_delta.clear();
+    }
+
+    #[test]
+    fn highlight_layout_handles_unaligned_utf8_and_stale_spans() {
+        let palette = Palette::for_theme(ThemeId::Dark);
+        let src = "sin(30°) + 2² + π + кириллица";
+        for start in 0..=src.len() + 5 {
+            for end in [start, start + 1, start + 3, src.len() + 10] {
+                let job = style::build_singleline_highlight(
+                    src,
+                    false,
+                    Some(&(start..end)),
+                    14.0,
+                    400.0,
+                    &palette,
+                );
+                assert_eq!(job.text, src);
+            }
+        }
+        let nb = Notebook::from_text("22 °C in °F\r\nошибка = 1 +\r\n");
+        let job = style::build_notebook_layout_job(nb.text(), nb.lines(), 15.0, 500.0, &palette);
+        assert_eq!(job.text, nb.text());
     }
 }

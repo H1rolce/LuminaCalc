@@ -73,7 +73,16 @@ fn push_unique(out: &mut Vec<Box<str>>, name: &str) {
     }
 }
 
+const MAX_PLOT_DEPTH: usize = 64;
+
 fn collect_params(expr: &Expr, indep: &str, out: &mut Vec<Box<str>>) {
+    collect_params_depth(expr, indep, out, 0);
+}
+
+fn collect_params_depth(expr: &Expr, indep: &str, out: &mut Vec<Box<str>>, depth: usize) {
+    if depth >= MAX_PLOT_DEPTH {
+        return;
+    }
     match &expr.kind {
         ExprKind::Number(_, _) | ExprKind::LineRef(_) => {}
         ExprKind::Ident(name) => {
@@ -85,23 +94,23 @@ fn collect_params(expr: &Expr, indep: &str, out: &mut Vec<Box<str>>) {
                 push_unique(out, name);
             }
         }
-        ExprKind::Unary(_, a) | ExprKind::Postfix(_, a) => collect_params(a, indep, out),
+        ExprKind::Unary(_, a) | ExprKind::Postfix(_, a) => collect_params_depth(a, indep, out, depth + 1),
         ExprKind::Binary(_, a, b) => {
-            collect_params(a, indep, out);
-            collect_params(b, indep, out);
+            collect_params_depth(a, indep, out, depth + 1);
+            collect_params_depth(b, indep, out, depth + 1);
         }
         ExprKind::Call { name, args, .. } => {
             if eval::function(name).is_none() && args.len() == 1 && name.as_ref() != indep {
                 push_unique(out, name);
             }
             for a in args {
-                collect_params(a, indep, out);
+                collect_params_depth(a, indep, out, depth + 1);
             }
         }
         ExprKind::Convert(a, target) => {
-            collect_params(a, indep, out);
+            collect_params_depth(a, indep, out, depth + 1);
             if let Target::Unit(u) = target {
-                collect_params(u, indep, out);
+                collect_params_depth(u, indep, out, depth + 1);
             }
         }
     }
@@ -123,6 +132,13 @@ fn const_f64(name: &str) -> Option<f64> {
 }
 
 pub fn eval_f64(expr: &Expr, indep: &str, x: f64, params: &[(Box<str>, f64)]) -> f64 {
+    eval_f64_depth(expr, indep, x, params, 0)
+}
+
+fn eval_f64_depth(expr: &Expr, indep: &str, x: f64, params: &[(Box<str>, f64)], depth: usize) -> f64 {
+    if depth >= MAX_PLOT_DEPTH {
+        return f64::NAN;
+    }
     match &expr.kind {
         ExprKind::Number(d, _) => d.to_f64().unwrap_or(f64::NAN),
         ExprKind::LineRef(_) => f64::NAN,
@@ -136,7 +152,7 @@ pub fn eval_f64(expr: &Expr, indep: &str, x: f64, params: &[(Box<str>, f64)]) ->
             }
         }
         ExprKind::Unary(op, a) => {
-            let v = eval_f64(a, indep, x, params);
+            let v = eval_f64_depth(a, indep, x, params, depth + 1);
             match op {
                 UnOp::Pos => v,
                 UnOp::Neg => -v,
@@ -144,7 +160,7 @@ pub fn eval_f64(expr: &Expr, indep: &str, x: f64, params: &[(Box<str>, f64)]) ->
             }
         }
         ExprKind::Postfix(op, a) => {
-            let v = eval_f64(a, indep, x, params);
+            let v = eval_f64_depth(a, indep, x, params, depth + 1);
             match op {
                 PostOp::Percent => v * 0.01,
                 PostOp::Factorial => {
@@ -162,8 +178,8 @@ pub fn eval_f64(expr: &Expr, indep: &str, x: f64, params: &[(Box<str>, f64)]) ->
             }
         }
         ExprKind::Binary(op, a, b) => {
-            let l = eval_f64(a, indep, x, params);
-            let r = eval_f64(b, indep, x, params);
+            let l = eval_f64_depth(a, indep, x, params, depth + 1);
+            let r = eval_f64_depth(b, indep, x, params, depth + 1);
             match op {
                 BinOp::Add => l + r,
                 BinOp::Sub => l - r,
@@ -196,12 +212,12 @@ pub fn eval_f64(expr: &Expr, indep: &str, x: f64, params: &[(Box<str>, f64)]) ->
                     } else {
                         return f64::NAN;
                     };
-                    return lhs * eval_f64(&args[0], indep, x, params);
+                    return lhs * eval_f64_depth(&args[0], indep, x, params, depth + 1);
                 }
                 return f64::NAN;
             };
-            let a0 = || args.first().map_or(f64::NAN, |e| eval_f64(e, indep, x, params));
-            let a1 = || args.get(1).map_or(f64::NAN, |e| eval_f64(e, indep, x, params));
+            let a0 = || args.first().map_or(f64::NAN, |e| eval_f64_depth(e, indep, x, params, depth + 1));
+            let a1 = || args.get(1).map_or(f64::NAN, |e| eval_f64_depth(e, indep, x, params, depth + 1));
             match canon {
                 "sqrt" => a0().sqrt(),
                 "cbrt" => a0().cbrt(),
@@ -257,16 +273,16 @@ pub fn eval_f64(expr: &Expr, indep: &str, x: f64, params: &[(Box<str>, f64)]) ->
                 "hypot" => a0().hypot(a1()),
                 "min" => args
                     .iter()
-                    .map(|e| eval_f64(e, indep, x, params))
+                    .map(|e| eval_f64_depth(e, indep, x, params, depth + 1))
                     .fold(f64::INFINITY, f64::min),
                 "max" => args
                     .iter()
-                    .map(|e| eval_f64(e, indep, x, params))
+                    .map(|e| eval_f64_depth(e, indep, x, params, depth + 1))
                     .fold(f64::NEG_INFINITY, f64::max),
                 _ => f64::NAN,
             }
         }
-        ExprKind::Convert(a, _) => eval_f64(a, indep, x, params),
+        ExprKind::Convert(a, _) => eval_f64_depth(a, indep, x, params, depth + 1),
     }
 }
 

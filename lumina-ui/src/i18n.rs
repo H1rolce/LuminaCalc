@@ -91,8 +91,8 @@ pub const RU: Strings = Strings {
     tab_plot: "Графики",
     tab_programmer: "Программист",
 
-    theme_tooltip: "Сменить тему (Ctrl+T)",
-    lang_tooltip: "Сменить язык RU / EN (Ctrl+L)",
+    theme_tooltip: "Сменить тему",
+    lang_tooltip: "Сменить язык RU / EN",
     pin_tooltip: "Поверх всех окон",
     hotkey_hint: "Глобальный вызов: Ctrl+Alt+Space",
 
@@ -169,8 +169,8 @@ pub const EN: Strings = Strings {
     tab_plot: "Plotter",
     tab_programmer: "Programmer",
 
-    theme_tooltip: "Switch theme (Ctrl+T)",
-    lang_tooltip: "Switch language RU / EN (Ctrl+L)",
+    theme_tooltip: "Switch theme",
+    lang_tooltip: "Switch language RU / EN",
     pin_tooltip: "Always on top",
     hotkey_hint: "Global hotkey: Ctrl+Alt+Space",
 

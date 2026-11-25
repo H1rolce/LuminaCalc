@@ -375,6 +375,24 @@ fn load_first(paths: &[PathBuf]) -> Option<Vec<u8>> {
     paths.iter().find_map(|p| std::fs::read(p).ok())
 }
 
+#[inline]
+fn floor_char_boundary(s: &str, idx: usize) -> usize {
+    let mut i = idx.min(s.len());
+    while i > 0 && !s.is_char_boundary(i) {
+        i -= 1;
+    }
+    i
+}
+
+#[inline]
+fn ceil_char_boundary(s: &str, idx: usize) -> usize {
+    let mut i = idx.min(s.len());
+    while i < s.len() && !s.is_char_boundary(i) {
+        i += 1;
+    }
+    i
+}
+
 pub fn append_highlighted_line(
     job: &mut LayoutJob,
     src: &str,
@@ -395,18 +413,27 @@ pub fn append_highlighted_line(
 
     let err_stroke = Stroke::new(1.6, palette.error);
     let err_bg = Palette::alpha(palette.error, if palette.dark { 28 } else { 22 });
-    let err_range = err_span.map(|s| {
+    let err_range = err_span.and_then(|s| {
+        if src.is_empty() {
+            return None;
+        }
         if s.start == s.end {
-            let end = s.end.min(src.len());
+            let end = floor_char_boundary(src, s.end);
             let start = src[..end].char_indices().next_back().map_or(end, |(i, _)| i);
-            start..end
+            (start < end).then_some(start..end)
         } else {
-            s.start.min(src.len())..s.end.min(src.len())
+            let start = floor_char_boundary(src, s.start);
+            let end = ceil_char_boundary(src, s.end).max(start);
+            (start < end).then_some(start..end)
         }
     });
 
     let push_slice = |job: &mut LayoutJob, range: Span, color: Color32| {
-        if range.start >= range.end || range.end > src.len() {
+        if range.start >= range.end
+            || range.end > src.len()
+            || !src.is_char_boundary(range.start)
+            || !src.is_char_boundary(range.end)
+        {
             return;
         }
         let Some(er) = &err_range else {
@@ -440,8 +467,8 @@ pub fn append_highlighted_line(
 
     let mut cursor = 0usize;
     for sp in spans {
-        let start = sp.range.start.min(src.len());
-        let end = sp.range.end.min(src.len());
+        let start = floor_char_boundary(src, sp.range.start).max(cursor);
+        let end = ceil_char_boundary(src, sp.range.end).max(start);
         if start > cursor {
             push_slice(job, cursor..start, palette.text_primary);
         }
@@ -477,7 +504,7 @@ pub fn build_notebook_layout_job(
 
     for (idx, line) in lines.iter().enumerate() {
         let err_span = line.output.error().map(|e| &e.span);
-        let line_slice_end = (line.byte_start + line.raw_len).min(full_text.len());
+        let line_slice_end = line.byte_start.saturating_add(line.raw_len).min(full_text.len());
         let clean = &line.source;
 
         append_highlighted_line(
@@ -490,11 +517,12 @@ pub fn build_notebook_layout_job(
             palette,
         );
 
-        let extra_cr = line_slice_end.saturating_sub(line.byte_start + clean.len());
-        if extra_cr > 0 {
-            let cr_start = line.byte_start + clean.len();
+        let cr_start = line.byte_start.saturating_add(clean.len());
+        if cr_start < line_slice_end
+            && let Some(cr_slice) = full_text.get(cr_start..line_slice_end)
+        {
             job.append(
-                &full_text[cr_start..line_slice_end],
+                cr_slice,
                 0.0,
                 TextFormat::simple(font_id.clone(), palette.text_primary),
             );
@@ -506,7 +534,9 @@ pub fn build_notebook_layout_job(
     }
 
     if job.text.len() != full_text.len() {
-        return LayoutJob::simple(full_text.to_owned(), font_id, palette.text_primary, wrap_width);
+        let mut fallback = LayoutJob::simple(full_text.to_owned(), font_id, palette.text_primary, wrap_width);
+        fallback.first_row_min_height = min_row_h;
+        return fallback;
     }
     job
 }
@@ -531,15 +561,17 @@ pub fn build_singleline_highlight(
 
 pub fn singleline_layouter<'a>(
     plot_mode: bool,
-    err_span: Option<&'a Span>,
+    err_ctx: Option<(&'a str, &'a Span)>,
     font_size: f32,
     palette: &'a Palette,
 ) -> impl FnMut(&egui::Ui, &dyn egui::TextBuffer, f32) -> Arc<egui::Galley> + 'a {
     move |ui: &egui::Ui, buf: &dyn egui::TextBuffer, wrap_width: f32| {
+        let src = buf.as_str();
+        let active_err = err_ctx.and_then(|(expected, span)| (expected == src).then_some(span));
         let job = build_singleline_highlight(
-            buf.as_str(),
+            src,
             plot_mode,
-            err_span,
+            active_err,
             font_size,
             wrap_width,
             palette,

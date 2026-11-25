@@ -39,6 +39,9 @@ impl Dim {
         }
         let mut r = [0i8; 8];
         for (i, v) in r.iter_mut().enumerate() {
+            if self.0[i] == i8::MIN && n == -1 {
+                return None;
+            }
             if self.0[i] % n != 0 {
                 return None;
             }
@@ -56,7 +59,7 @@ impl Dim {
         for (i, &e) in self.0.iter().enumerate() {
             match e.cmp(&0) {
                 std::cmp::Ordering::Greater => num.push((BASE_SYMBOLS[i], e)),
-                std::cmp::Ordering::Less => den.push((BASE_SYMBOLS[i], -e)),
+                std::cmp::Ordering::Less => den.push((BASE_SYMBOLS[i], e.saturating_neg())),
                 std::cmp::Ordering::Equal => {}
             }
         }

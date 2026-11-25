@@ -65,12 +65,14 @@ pub enum Stmt {
     Assign { name: Box<str>, name_span: Span, value: Expr },
 }
 
+const MAX_PARSE_DEPTH: usize = 64;
+
 pub fn parse_stmt(tokens: &[Token<'_>], src_len: usize) -> CalcResult<Stmt> {
     let toks: Vec<Token<'_>> = tokens.iter().copied().filter(|t| t.tok != Tok::Comment).collect();
     if toks.is_empty() {
         return Ok(Stmt::Empty);
     }
-    let mut p = Parser { toks: &toks, pos: 0, end: src_len };
+    let mut p = Parser { toks: &toks, pos: 0, end: src_len, depth: 0 };
     if let (Some(Tok::Ident(name)), Some(Tok::Assign)) = (p.peek_at(0), p.peek_at(1)) {
         let name_span = toks[0].span();
         p.pos = 2;
@@ -123,6 +125,7 @@ struct Parser<'t, 'a> {
     toks: &'t [Token<'a>],
     pos: usize,
     end: usize,
+    depth: usize,
 }
 
 fn mk(kind: ExprKind, span: Span) -> Expr {
@@ -166,7 +169,22 @@ impl<'a> Parser<'_, 'a> {
         if self.pos < self.toks.len() { Err(self.err_here()) } else { Ok(()) }
     }
 
+    fn enter_depth(&mut self) -> CalcResult<()> {
+        if self.depth >= MAX_PARSE_DEPTH {
+            return Err(CalcError::new(ErrorKind::Overflow, self.span_here()));
+        }
+        self.depth += 1;
+        Ok(())
+    }
+
     fn expr(&mut self) -> CalcResult<Expr> {
+        self.enter_depth()?;
+        let res = self.expr_inner();
+        self.depth -= 1;
+        res
+    }
+
+    fn expr_inner(&mut self) -> CalcResult<Expr> {
         let lhs = self.bitor()?;
         if self.peek() == Some(Tok::Keyword(Kw::In)) {
             self.bump();
@@ -295,7 +313,10 @@ impl<'a> Parser<'_, 'a> {
         };
         let start = self.span_here().start;
         self.bump();
-        let inner = self.unary()?;
+        self.enter_depth()?;
+        let inner = self.unary();
+        self.depth -= 1;
+        let inner = inner?;
         let span = start..inner.span.end;
         Ok(mk(ExprKind::Unary(op, Box::new(inner)), span))
     }

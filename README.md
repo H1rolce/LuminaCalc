@@ -6,6 +6,8 @@
 
 > License: **MIT** (see [LICENSE](LICENSE))
 
+![LuminaCalc Preview](preview.gif)
+
 ---
 
 ## Features
@@ -115,9 +117,12 @@ flowchart LR
 |---|---|
 | `Ctrl+Alt+Space` | Global summon / focus window |
 | `Ctrl+1` … `Ctrl+4` | Switch tabs (Notebook / Scientific / Plotter / Programmer) |
-| `Ctrl+T` | Toggle theme (Dark / Light with Windows accent) |
-| `Ctrl+L` | Toggle language (EN / RU) |
 | `Ctrl++` / `Ctrl+-` | Increase / decrease Notebook font size |
+| `S` / `Shift+S` / `Ctrl+S` | Scientific: `sin(` / `asin(` / `sinh(` (layout-independent) |
+| `O` / `Shift+O` / `Ctrl+O` | Scientific: `cos(` / `acos(` / `cosh(` (layout-independent) |
+| `T` / `Shift+T` / `Ctrl+T` | Scientific: `tan(` / `atan(` / `tanh(` (layout-independent) |
+| `L` / `N` / `R` / `Q` / `P` / `E` / `Shift+E` / `D` | Scientific: `log(`, `ln(`, `√(`, `²`, `π`, `e`, `×10ˣ`, `S⇔D` |
+| `F5` / `F6` / `F7` / `F8` | Programmer: switch `HEX` / `DEC` / `OCT` / `BIN` |
 | `◀` `▶` `▲` `▼` `Tab` | Navigate expression, fractions, and history in Scientific mode |
 | `Esc` | Clear expression / close `CONST` menu |
 
@@ -128,7 +133,7 @@ flowchart LR
 Requires Rust (`edition = 2024`).
 
 ```bash
-# Run the full workspace test suite (72 tests)
+# Run the full workspace test suite (90 tests)
 cargo test --workspace
 
 # Run Clippy with warnings as errors

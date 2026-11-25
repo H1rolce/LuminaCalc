@@ -457,9 +457,15 @@ impl PlotView {
                             dirty_state = true;
                         }
 
-                        let err_span_opt = err_info.as_ref().map(|e| e.span.clone());
-                        let mut layouter =
-                            style::singleline_layouter(true, err_span_opt.as_ref(), 14.0, palette);
+                        let err_ctx = err_info
+                            .as_ref()
+                            .map(|e| (self.curves[i].expr_text.clone(), e.span.clone()));
+                        let mut layouter = style::singleline_layouter(
+                            true,
+                            err_ctx.as_ref().map(|(src, span)| (src.as_str(), span)),
+                            14.0,
+                            palette,
+                        );
 
                         let input_w = (ui.available_width() - 26.0).max(80.0);
                         let curve_id = self.curves[i].id;

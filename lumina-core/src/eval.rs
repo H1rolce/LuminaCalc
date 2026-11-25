@@ -186,9 +186,16 @@ fn eval_trig(canon: &str, v: &Value, angle_unit: AngleUnit, span: &Span) -> Calc
         match angle_unit {
             AngleUnit::Deg => {
                 let c360 = Decimal::from(360);
-                let mut deg = v.si % c360;
+                let Some(mut deg) = v.si.checked_rem(c360) else {
+                    let deg_f = to_f64(v.si).rem_euclid(360.0);
+                    return eval_trig_rad(canon, deg_f.to_radians(), span);
+                };
                 if deg.is_sign_negative() {
-                    deg += c360;
+                    let Some(pos) = deg.checked_add(c360) else {
+                        let deg_f = to_f64(v.si).rem_euclid(360.0);
+                        return eval_trig_rad(canon, deg_f.to_radians(), span);
+                    };
+                    deg = pos;
                 }
                 if deg.fract().is_zero()
                     && let Some(d_int) = deg.to_i32()
@@ -218,9 +225,16 @@ fn eval_trig(canon: &str, v: &Value, angle_unit: AngleUnit, span: &Span) -> Calc
             }
             AngleUnit::Grad => {
                 let c400 = Decimal::from(400);
-                let mut grad = v.si % c400;
+                let Some(mut grad) = v.si.checked_rem(c400) else {
+                    let grad_f = to_f64(v.si).rem_euclid(400.0);
+                    return eval_trig_rad(canon, grad_f * (std::f64::consts::PI / 200.0), span);
+                };
                 if grad.is_sign_negative() {
-                    grad += c400;
+                    let Some(pos) = grad.checked_add(c400) else {
+                        let grad_f = to_f64(v.si).rem_euclid(400.0);
+                        return eval_trig_rad(canon, grad_f * (std::f64::consts::PI / 200.0), span);
+                    };
+                    grad = pos;
                 }
                 if grad.fract().is_zero()
                     && let Some(g_int) = grad.to_i32()
@@ -317,8 +331,17 @@ fn powi_exact(base: Decimal, exp: i64, span: &Span) -> CalcResult<Decimal> {
     Ok(result)
 }
 
+const MAX_EVAL_DEPTH: usize = 64;
+
 pub fn eval(e: &Expr, env: &Env) -> CalcResult<Value> {
+    eval_depth(e, env, 0)
+}
+
+fn eval_depth(e: &Expr, env: &Env, depth: usize) -> CalcResult<Value> {
     let span = &e.span;
+    if depth >= MAX_EVAL_DEPTH {
+        return err(ErrorKind::Overflow, span);
+    }
     match &e.kind {
         ExprKind::Number(d, radix) => {
             let mut v = Value::num(*d);
@@ -334,7 +357,7 @@ pub fn eval(e: &Expr, env: &Env) -> CalcResult<Value> {
             .and_then(|v| v.clone())
             .ok_or_else(|| CalcError::new(ErrorKind::BadLineRef(*n), span.clone())),
         ExprKind::Unary(op, a) => {
-            let mut v = eval(a, env)?;
+            let mut v = eval_depth(a, env, depth + 1)?;
             v.bare_unit = false;
             match op {
                 UnOp::Pos => Ok(v),
@@ -350,14 +373,18 @@ pub fn eval(e: &Expr, env: &Env) -> CalcResult<Value> {
             }
         }
         ExprKind::Postfix(op, a) => {
-            let mut v = eval(a, env)?;
+            let mut v = eval_depth(a, env, depth + 1)?;
             v.bare_unit = false;
             match op {
                 PostOp::Percent => {
                     if !v.is_dimensionless() {
                         return err(ErrorKind::ExpectedDimensionless, &a.span);
                     }
-                    v.si = normalize_zero(v.si / Decimal::ONE_HUNDRED);
+                    let q = v
+                        .si
+                        .checked_div(Decimal::ONE_HUNDRED)
+                        .ok_or_else(|| CalcError::new(ErrorKind::Overflow, span.clone()))?;
+                    v.si = normalize_zero(q);
                     Ok(v)
                 }
                 PostOp::Factorial => {
@@ -379,10 +406,10 @@ pub fn eval(e: &Expr, env: &Env) -> CalcResult<Value> {
                 }
             }
         }
-        ExprKind::Binary(op, a, b) => binary(*op, a, b, span, env),
-        ExprKind::Call { name, name_span, args } => call(name, name_span, args, span, env),
+        ExprKind::Binary(op, a, b) => binary(*op, a, b, span, env, depth + 1),
+        ExprKind::Call { name, name_span, args } => call(name, name_span, args, span, env, depth + 1),
         ExprKind::Convert(a, target) => {
-            let mut v = eval(a, env)?;
+            let mut v = eval_depth(a, env, depth + 1)?;
             v.bare_unit = false;
             match target {
                 Target::Notation(n) => {
@@ -395,7 +422,7 @@ pub fn eval(e: &Expr, env: &Env) -> CalcResult<Value> {
                     Ok(v)
                 }
                 Target::Unit(u) => {
-                    let t = eval(u, env)?;
+                    let t = eval_depth(u, env, depth + 1)?;
                     let Some(mut hint) = t.unit.clone() else {
                         return err(ErrorKind::BadConversionTarget, &u.span);
                     };
@@ -441,7 +468,10 @@ fn ident(name: &str, span: &Span, env: &Env) -> CalcResult<Value> {
                         .ok_or_else(|| CalcError::new(ErrorKind::Overflow, span.clone()))?;
                 }
                 if s == Special::Avg {
-                    acc.si /= Decimal::from(env.block.len());
+                    acc.si = acc
+                        .si
+                        .checked_div(Decimal::from(env.block.len()))
+                        .ok_or_else(|| CalcError::new(ErrorKind::Overflow, span.clone()))?;
                 }
                 Ok(acc)
             }
@@ -462,17 +492,17 @@ fn ident(name: &str, span: &Span, env: &Env) -> CalcResult<Value> {
     err(ErrorKind::UnknownIdent(name.to_owned()), span)
 }
 
-fn binary(op: BinOp, a: &Expr, b: &Expr, span: &Span, env: &Env) -> CalcResult<Value> {
-    let lhs = eval(a, env)?;
+fn binary(op: BinOp, a: &Expr, b: &Expr, span: &Span, env: &Env, depth: usize) -> CalcResult<Value> {
+    let lhs = eval_depth(a, env, depth)?;
     if matches!(op, BinOp::Add | BinOp::Sub)
         && let ExprKind::Postfix(PostOp::Percent, inner) = &b.kind
     {
-        let p = eval(inner, env)?;
+        let p = eval_depth(inner, env, depth)?;
         if !p.is_dimensionless() {
             return err(ErrorKind::ExpectedDimensionless, &inner.span);
         }
-        let ratio = p.si / Decimal::ONE_HUNDRED;
         let overflow = || CalcError::new(ErrorKind::Overflow, span.clone());
+        let ratio = p.si.checked_div(Decimal::ONE_HUNDRED).ok_or_else(overflow)?;
         let k = if op == BinOp::Add {
             Decimal::ONE.checked_add(ratio)
         } else {
@@ -484,7 +514,7 @@ fn binary(op: BinOp, a: &Expr, b: &Expr, span: &Span, env: &Env) -> CalcResult<V
         out.si = normalize_zero(out.si.checked_mul(k).ok_or_else(overflow)?);
         return Ok(out);
     }
-    let rhs = eval(b, env)?;
+    let rhs = eval_depth(b, env, depth)?;
     apply_binary(op, lhs, rhs, span, &b.span)
 }
 
@@ -627,7 +657,14 @@ fn arity(name: &str, expected: &'static str, got: usize, span: &Span) -> CalcErr
     CalcError::new(ErrorKind::Arity { name: name.to_owned(), expected, got }, span.clone())
 }
 
-fn call(name: &str, name_span: &Span, args: &[Expr], span: &Span, env: &Env) -> CalcResult<Value> {
+fn call(
+    name: &str,
+    name_span: &Span,
+    args: &[Expr],
+    span: &Span,
+    env: &Env,
+    depth: usize,
+) -> CalcResult<Value> {
     let Some(canon) = function(name).filter(|_| !env.vars.contains_key(name)) else {
         if args.len() == 1
             && (env.vars.contains_key(name)
@@ -636,12 +673,15 @@ fn call(name: &str, name_span: &Span, args: &[Expr], span: &Span, env: &Env) -> 
                 || special(name).is_some())
         {
             let lhs = ident(name, name_span, env)?;
-            let rhs = eval(&args[0], env)?;
+            let rhs = eval_depth(&args[0], env, depth)?;
             return apply_binary(BinOp::Mul, lhs, rhs, span, &args[0].span);
         }
         return err(ErrorKind::UnknownFunction(name.to_owned()), name_span);
     };
-    let vals: Vec<Value> = args.iter().map(|a| eval(a, env)).collect::<CalcResult<_>>()?;
+    let vals: Vec<Value> = args
+        .iter()
+        .map(|a| eval_depth(a, env, depth))
+        .collect::<CalcResult<_>>()?;
     let arg_span = |i: usize| args.get(i).map_or(span.clone(), |a| a.span.clone());
     let one = || -> CalcResult<&Value> {
         if vals.len() == 1 { Ok(&vals[0]) } else { Err(arity(name, "1", vals.len(), name_span)) }
@@ -765,7 +805,10 @@ fn call(name: &str, name_span: &Span, args: &[Expr], span: &Span, env: &Env) -> 
                 for i in 1..=k_lim {
                     let num = Decimal::from_i128(n - k_lim + i).ok_or_else(overflow)?;
                     let den = Decimal::from_i128(i).ok_or_else(overflow)?;
-                    acc = acc.checked_mul(num).ok_or_else(overflow)? / den;
+                    acc = acc
+                        .checked_mul(num)
+                        .and_then(|v| v.checked_div(den))
+                        .ok_or_else(overflow)?;
                 }
                 acc.round_dp(0)
             };
@@ -1072,5 +1115,52 @@ mod tests {
 
         let tiny = eval_str("exp(-40)", &Env::default()).expect("ok");
         assert!(!tiny.si.is_zero());
+    }
+
+    #[test]
+    fn trig_high_scale_decimals_in_deg_and_grad_do_not_panic() {
+        for unit in [AngleUnit::Deg, AngleUnit::Grad, AngleUnit::Rad] {
+            let env = Env { angle_unit: unit, ..Env::default() };
+            for expr in [
+                "sin(1/3)",
+                "cos(2/3)",
+                "tan(1/7)",
+                "sin(pi)",
+                "cos(sqrt(2))",
+                "sin(-1/3)",
+                "cos(1000000/3)",
+                "tan(360 + 1/3)",
+            ] {
+                let res = eval_str(expr, &env);
+                assert!(res.is_ok(), "failed on {expr} in {unit:?}: {res:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn deep_nesting_returns_overflow_instead_of_stack_overflow() {
+        let open = "(".repeat(300);
+        let close = ")".repeat(300);
+        let deep_parens = format!("{open}1{close}");
+        assert_eq!(kind(&deep_parens), ErrorKind::Overflow);
+
+        let deep_neg = format!("{}1", "-".repeat(300));
+        assert_eq!(kind(&deep_neg), ErrorKind::Overflow);
+    }
+
+    #[test]
+    fn extreme_temperature_and_dim_labels_do_not_panic() {
+        for expr in [
+            "1/3 K in °C",
+            "1/3 K in °F",
+            "-70000000000000000000000000000 K in °C",
+            "m^-128",
+            "1 / m^128",
+        ] {
+            if let Ok(v) = eval_str(expr, &Env::default()) {
+                let _ = v.plain(10);
+                let _ = v.display(&FormatOptions { precision: 40, grouping: Some(' ') });
+            }
+        }
     }
 }
