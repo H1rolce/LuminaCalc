@@ -6,6 +6,8 @@
 
 ![LuminaCalc Preview](preview.gif)
 
+[![Latest Release](https://img.shields.io/github/v/release/H1rolce/LuminaCalc?label=Download%20Latest%20Release&style=for-the-badge)](https://github.com/H1rolce/LuminaCalc/releases/latest)
+
 ---
 
 ## Features
@@ -15,6 +17,46 @@
 - **2D Function Plotter** — multi-curve plotting on `egui_plot`, auto-generated parameter sliders (`y = a * sin(b * x)`) with smooth animation, discontinuity/asymptote splitting (`1/x`, `tan(x)`), and magnetic cursor snapping to roots, extrema, Y-intercepts, and curve intersections.
 - **Programmer & Unit Converter** — 64/32/16/8-bit register (`HEX`/`DEC`/`OCT`/`BIN`, signed/unsigned, bitwise ops, clickable & drag-paintable 64-bit grid) plus an engineering unit converter.
 - **Desktop Integration** — live Windows accent color reading from the registry (`DWM\AccentColor`), debounced TOML state persistence, global summon hotkey (`Ctrl+Alt+Space`), always-on-top mode, and embedded multi-resolution `.exe` & taskbar icon.
+
+---
+
+## Download
+
+Prebuilt portable Windows x64 binaries (`LuminaCalc.exe`) are available on the [**Latest Release**](https://github.com/H1rolce/LuminaCalc/releases/latest) page (see also [all releases](https://github.com/H1rolce/LuminaCalc/releases)). No installation required — download and run.
+
+---
+
+## Keyboard Shortcuts
+
+| Shortcut | Action |
+|---|---|
+| `Ctrl+Alt+Space` | Global summon / focus window |
+| `Ctrl+1` … `Ctrl+4` | Switch tabs (Notebook / Scientific / Plotter / Programmer) |
+| `Ctrl++` / `Ctrl+-` | Increase / decrease Notebook font size |
+| `S` / `Shift+S` / `Ctrl+S` | Scientific: `sin(` / `asin(` / `sinh(` (layout-independent) |
+| `O` / `Shift+O` / `Ctrl+O` | Scientific: `cos(` / `acos(` / `cosh(` (layout-independent) |
+| `T` / `Shift+T` / `Ctrl+T` | Scientific: `tan(` / `atan(` / `tanh(` (layout-independent) |
+| `L` / `N` / `R` / `Q` / `P` / `E` / `Shift+E` / `D` | Scientific: `log(`, `ln(`, `√(`, `²`, `π`, `e`, `×10ˣ`, `S⇔D` |
+| `F5` / `F6` / `F7` / `F8` | Programmer: switch `HEX` / `DEC` / `OCT` / `BIN` |
+| `◀` `▶` `▲` `▼` `Tab` | Navigate expression, fractions, and history in Scientific mode |
+| `Esc` | Clear expression / close `CONST` menu |
+
+---
+
+## Building from Source
+
+Requires Rust (`edition = 2024`).
+
+```bash
+# Run the full workspace test suite
+cargo test --workspace
+
+# Run Clippy with warnings as errors
+cargo clippy --workspace --all-targets -- -D warnings
+
+# Optimized release build (-O3, fat LTO, single codegen-unit, strip)
+cargo build --release -p lumina-ui
+```
 
 ---
 
@@ -106,42 +148,6 @@ flowchart LR
 - **Plotter:** caches sampled curve segments and snap points by `(version, bounds)` and passes them via `PlotPoints::Borrowed` with zero per-frame copies.
 - **Programmer:** caches unit converter evaluations by `(cat, from, to, val)`.
 - **Idle Efficiency:** debounced TOML saves (`0.8s`) and toast notifications use `request_repaint_after` so idle CPU/GPU usage stays near zero.
-
----
-
-## Keyboard Shortcuts
-
-| Shortcut | Action |
-|---|---|
-| `Ctrl+Alt+Space` | Global summon / focus window |
-| `Ctrl+1` … `Ctrl+4` | Switch tabs (Notebook / Scientific / Plotter / Programmer) |
-| `Ctrl++` / `Ctrl+-` | Increase / decrease Notebook font size |
-| `S` / `Shift+S` / `Ctrl+S` | Scientific: `sin(` / `asin(` / `sinh(` (layout-independent) |
-| `O` / `Shift+O` / `Ctrl+O` | Scientific: `cos(` / `acos(` / `cosh(` (layout-independent) |
-| `T` / `Shift+T` / `Ctrl+T` | Scientific: `tan(` / `atan(` / `tanh(` (layout-independent) |
-| `L` / `N` / `R` / `Q` / `P` / `E` / `Shift+E` / `D` | Scientific: `log(`, `ln(`, `√(`, `²`, `π`, `e`, `×10ˣ`, `S⇔D` |
-| `F5` / `F6` / `F7` / `F8` | Programmer: switch `HEX` / `DEC` / `OCT` / `BIN` |
-| `◀` `▶` `▲` `▼` `Tab` | Navigate expression, fractions, and history in Scientific mode |
-| `Esc` | Clear expression / close `CONST` menu |
-
----
-
-## Building from Source
-
-Requires Rust (`edition = 2024`).
-
-```bash
-# Run the full workspace test suite (90 tests)
-cargo test --workspace
-
-# Run Clippy with warnings as errors
-cargo clippy --workspace --all-targets -- -D warnings
-
-# Optimized release build (-O3, fat LTO, single codegen-unit, strip)
-cargo build --release -p lumina-ui
-```
-
-Prebuilt Windows x64 binaries are available in **Releases**.
 
 ---
 
