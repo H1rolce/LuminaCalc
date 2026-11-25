@@ -4,8 +4,6 @@
 
 **LuminaCalc** is a fast, native desktop calculator built in Rust (`egui` / `eframe`) combining four calculation modes in a single lightweight window, with automatic Windows 11 system accent theming (Dark / Light) and bilingual UI (EN / RU).
 
-> License: **MIT** (see [LICENSE](LICENSE))
-
 ![LuminaCalc Preview](preview.gif)
 
 ---
