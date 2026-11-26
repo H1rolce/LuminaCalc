@@ -340,7 +340,14 @@ pub fn install_fonts(ctx: &Context) {
     #[cfg(not(target_os = "windows"))]
     {
         prop_candidates.push(PathBuf::from("/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"));
+        prop_candidates.push(PathBuf::from("/usr/share/fonts/TTF/DejaVuSans.ttf"));
+        prop_candidates.push(PathBuf::from("/usr/share/fonts/dejavu-sans-fonts/DejaVuSans.ttf"));
         mono_candidates.push(PathBuf::from("/usr/share/fonts/truetype/dejavu/DejaVuSansMono.ttf"));
+        mono_candidates.push(PathBuf::from("/usr/share/fonts/TTF/DejaVuSansMono.ttf"));
+        mono_candidates.push(PathBuf::from("/usr/share/fonts/dejavu-sans-mono-fonts/DejaVuSansMono.ttf"));
+        sym_candidates.push(PathBuf::from("/usr/share/fonts/truetype/noto/NotoSansSymbols2-Regular.ttf"));
+        sym_candidates.push(PathBuf::from("/usr/share/fonts/noto/NotoSansSymbols2-Regular.ttf"));
+        sym_candidates.push(PathBuf::from("/usr/share/fonts/truetype/noto/NotoSansSymbols-Regular.ttf"));
     }
 
     if let Some(bytes) = load_first(&prop_candidates) {

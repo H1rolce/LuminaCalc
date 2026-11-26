@@ -1,0 +1,12 @@
+[Desktop Entry]
+Type=Application
+Name=LuminaCalc
+GenericName=Calculator
+GenericName[ru]=Калькулятор
+Comment=Fast native desktop calculator with Notebook, Scientific, Plotter, and Programmer modes
+Comment[ru]=Быстрый нативный калькулятор с режимами Блокнота, Инженерного, Графиков и Программиста
+Exec=luminacalc
+Icon=luminacalc
+Terminal=false
+Categories=Utility;Calculator;Science;
+StartupWMClass=luminacalc

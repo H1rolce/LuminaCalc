@@ -31,7 +31,9 @@ pub struct LuminaApp {
     _hotkey_mgr: Option<GlobalHotKeyManager>,
 
     dirty_since: Option<Instant>,
+    #[cfg(target_os = "windows")]
     last_sys_theme: crate::win_theme::SystemTheme,
+    #[cfg(target_os = "windows")]
     last_sys_check: Instant,
 }
 
@@ -40,6 +42,7 @@ impl LuminaApp {
         style::install_fonts(&cc.egui_ctx);
 
         let saved = AppState::load();
+        #[cfg(target_os = "windows")]
         let last_sys_theme = crate::win_theme::read_system_theme();
         let palette = style::apply_theme(&cc.egui_ctx, saved.theme);
 
@@ -75,7 +78,9 @@ impl LuminaApp {
             clipboard: arboard::Clipboard::new().ok(),
             _hotkey_mgr: hotkey_mgr,
             dirty_since: None,
+            #[cfg(target_os = "windows")]
             last_sys_theme,
+            #[cfg(target_os = "windows")]
             last_sys_check: Instant::now(),
         }
     }
@@ -209,6 +214,7 @@ impl eframe::App for LuminaApp {
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         let ctx = ui.ctx().clone();
 
+        #[cfg(target_os = "windows")]
         if self.last_sys_check.elapsed().as_secs_f32() >= 2.0 {
             self.last_sys_check = Instant::now();
             let cur = crate::win_theme::read_system_theme();
@@ -337,6 +343,11 @@ impl eframe::App for LuminaApp {
 }
 
 fn setup_global_hotkey(ctx: &Context) -> Option<GlobalHotKeyManager> {
+    #[cfg(target_os = "linux")]
+    if std::env::var_os("DISPLAY").is_none() {
+        return None;
+    }
+
     let mgr = GlobalHotKeyManager::new().ok()?;
     let hk = HotKey::new(Some(GhMod::CONTROL | GhMod::ALT), Code::Space);
     let hk_id = hk.id();
