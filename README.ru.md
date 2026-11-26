@@ -2,7 +2,7 @@
 
 [English](README.md) | **Русский**
 
-**LuminaCalc** — быстрый нативный десктопный калькулятор на Rust (`egui` / `eframe`), объединяющий 4 режима работы в одном легковесном окне с адаптацией под системный акцент Windows 11 (Dark / Light) и двуязычным интерфейсом (RU / EN).
+**LuminaCalc** — быстрый нативный кроссплатформенный десктопный калькулятор на Rust (`egui` / `eframe`) для **Windows** и **Linux**, объединяющий 4 режима работы в одном легковесном окне с переключением темы Dark / Light (и автоподстройкой системного акцента на Windows) и двуязычным интерфейсом (RU / EN).
 
 ![Демо LuminaCalc](preview.gif)
 
@@ -16,13 +16,21 @@
 - **Инженерный калькулятор (Casio ClassWiz / fx-991ES PLUS style)** — интерактивный 2D Natural-V.P.A.M. дисплей с многоэтажными дробями, вводом скобок внутри дробей (`((2+5)*2)/(3)`), курсорным редактированием кликом мыши, `SHIFT`, `HYP`, `DEG/RAD/GRAD`, `S⇔D`, `a b/c`, `ENG`, `CONST`, памятью (`MC/MR/M-/M+/STO`), цепочкой `Ans`, автозакрытием скобок на `=`, умным `DEL` и сохраняемой историей.
 - **Графики (2D Plotter)** — построение нескольких функций на `egui_plot`, автогенерация слайдеров свободных параметров (`y = a * sin(b * x)`) с плавной анимацией, разрыв асимптот (`1/x`, `tan(x)`) и магнитное прилипание курсора к корням, экстремумам, пересечениям с осью Y и между кривыми.
 - **Программист + Конвертер единиц** — 64/32/16/8-битный регистр (`HEX`/`DEC`/`OCT`/`BIN`, знаковый/беззнаковый, побитовые операции, кликабельная/перетаскиваемая 64-битная сетка) и инженерный конвертер величин.
-- **Системная интеграция** — чтение акцентного цвета Windows из реестра (`DWM\AccentColor`), автосохранение состояния в TOML, глобальная горячая клавиша вызова (`Ctrl+Alt+Space`), режим «поверх всех окон», встроенная многоразмерная иконка `.exe` и панели задач.
+- **Системная интеграция** — нативная работа на **Windows** и **Linux** (Wayland / X11 с `app_id = "luminacalc"` и `.desktop`-ярлыком), чтение акцентного цвета системы на Windows (`DWM\AccentColor`), автосохранение состояния в TOML, глобальная горячая клавиша вызова (`Ctrl+Alt+Space`), режим «поверх всех окон» и встроенные иконки.
 
 ---
 
 ## Скачать
 
-Готовый портативный бинарник для Windows x64 (`LuminaCalc.exe`) доступен на странице [**Последнего релиза**](https://github.com/H1rolce/LuminaCalc/releases/latest) (см. также [все релизы](https://github.com/H1rolce/LuminaCalc/releases)). Установка не требуется — достаточно скачать и запустить.
+Готовые сборки x86_64 для **Windows** и **Linux** доступны на странице [**Последнего релиза**](https://github.com/H1rolce/LuminaCalc/releases/latest) (см. также [все релизы](https://github.com/H1rolce/LuminaCalc/releases)):
+
+- **Windows:** `LuminaCalc-windows-x86_64.zip` — портативный `LuminaCalc.exe`, достаточно распаковать и запустить.
+- **Linux (AppImage):** `LuminaCalc-linux-x86_64.AppImage` — универсальный портативный пакет:
+  ```bash
+  chmod +x LuminaCalc-linux-x86_64.AppImage
+  ./LuminaCalc-linux-x86_64.AppImage
+  ```
+- **Linux (tar.gz):** `LuminaCalc-linux-x86_64.tar.gz` — нативный бинарник `luminacalc`, ярлык `luminacalc.desktop` и иконка `luminacalc.png`.
 
 ---
 
@@ -46,6 +54,17 @@
 ## Сборка из исходников
 
 Требуется Rust (`edition = 2024`).
+
+На **Linux (Ubuntu / Debian)** предварительно установите системные `-dev` пакеты:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y pkg-config libxkbcommon-dev libwayland-dev libx11-dev libxi-dev \
+  libxcursor-dev libxrandr-dev libgl1-mesa-dev libfontconfig1-dev libgtk-3-dev \
+  libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+```
+
+Затем запустите тесты, линтер или релизную сборку:
 
 ```bash
 # Запуск тестов всего workspace
@@ -84,8 +103,8 @@ LuminaCalc/
 │   └── tests/
 │       └── integration.rs      # Интеграционные тесты ядра
 └── lumina-ui/                  # Десктопный интерфейс на eframe / egui
-    ├── build.rs                # Встраивание многоразмерной icon.ico в PE-ресурсы Windows
-    ├── assets/                 # icon.png (256x256), icon.ico (16..256px), icon.rc
+    ├── build.rs                # Встраивание многоразмерной icon.ico на Windows
+    ├── assets/                 # icon.png, icon.ico, icon.rc, luminacalc.desktop
     └── src/
         ├── main.rs             # Точка входа eframe, окно без рамок, иконка окна/панели задач
         ├── app.rs              # Корневое состояние, хоткеи, буфер обмена, дебаунс сохранения TOML

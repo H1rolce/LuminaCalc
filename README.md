@@ -2,7 +2,7 @@
 
 **English** | [Русский](README.ru.md)
 
-**LuminaCalc** is a fast, native desktop calculator built in Rust (`egui` / `eframe`) combining four calculation modes in a single lightweight window, with automatic Windows 11 system accent theming (Dark / Light) and bilingual UI (EN / RU).
+**LuminaCalc** is a fast, native cross-platform desktop calculator built in Rust (`egui` / `eframe`) for **Windows** and **Linux**, combining four calculation modes in a single lightweight window with Dark / Light theming (plus automatic system accent color on Windows) and bilingual UI (EN / RU).
 
 ![LuminaCalc Preview](preview.gif)
 
@@ -16,13 +16,21 @@
 - **Scientific Calculator (Casio ClassWiz / fx-991ES PLUS style)** — interactive 2D Natural-V.P.A.M. display with multi-story fractions, balanced parentheses inside fractions (`((2+5)*2)/(3)`), mouse-clickable caret positioning, `SHIFT`, `HYP`, `DEG/RAD/GRAD`, `S⇔D`, `a b/c`, `ENG`, `CONST`, memory (`MC/MR/M-/M+/STO`), `Ans` chaining after `=`, automatic parenthesis closing, smart multi-token `DEL`, and persistent calculation history.
 - **2D Function Plotter** — multi-curve plotting on `egui_plot`, auto-generated parameter sliders (`y = a * sin(b * x)`) with smooth animation, discontinuity/asymptote splitting (`1/x`, `tan(x)`), and magnetic cursor snapping to roots, extrema, Y-intercepts, and curve intersections.
 - **Programmer & Unit Converter** — 64/32/16/8-bit register (`HEX`/`DEC`/`OCT`/`BIN`, signed/unsigned, bitwise ops, clickable & drag-paintable 64-bit grid) plus an engineering unit converter.
-- **Desktop Integration** — live Windows accent color reading from the registry (`DWM\AccentColor`), debounced TOML state persistence, global summon hotkey (`Ctrl+Alt+Space`), always-on-top mode, and embedded multi-resolution `.exe` & taskbar icon.
+- **Desktop Integration** — native cross-platform desktop experience for **Windows** and **Linux** (Wayland / X11 with `app_id = "luminacalc"` and `.desktop` launcher), live system accent color reading on Windows (`DWM\AccentColor`), debounced TOML state persistence, global summon hotkey (`Ctrl+Alt+Space`), always-on-top mode, and embedded multi-resolution icons.
 
 ---
 
 ## Download
 
-Prebuilt portable Windows x64 binaries (`LuminaCalc.exe`) are available on the [**Latest Release**](https://github.com/H1rolce/LuminaCalc/releases/latest) page (see also [all releases](https://github.com/H1rolce/LuminaCalc/releases)). No installation required — download and run.
+Prebuilt x86_64 binaries for **Windows** and **Linux** are available on the [**Latest Release**](https://github.com/H1rolce/LuminaCalc/releases/latest) page (see also [all releases](https://github.com/H1rolce/LuminaCalc/releases)):
+
+- **Windows:** `LuminaCalc-windows-x86_64.zip` — portable `LuminaCalc.exe`, extract and run.
+- **Linux (AppImage):** `LuminaCalc-linux-x86_64.AppImage` — universal portable package:
+  ```bash
+  chmod +x LuminaCalc-linux-x86_64.AppImage
+  ./LuminaCalc-linux-x86_64.AppImage
+  ```
+- **Linux (tar.gz):** `LuminaCalc-linux-x86_64.tar.gz` — native binary `luminacalc`, `luminacalc.desktop` entry, and `luminacalc.png` icon.
 
 ---
 
@@ -46,6 +54,17 @@ Prebuilt portable Windows x64 binaries (`LuminaCalc.exe`) are available on the [
 ## Building from Source
 
 Requires Rust (`edition = 2024`).
+
+On **Linux (Ubuntu / Debian)**, install the required system development libraries first:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y pkg-config libxkbcommon-dev libwayland-dev libx11-dev libxi-dev \
+  libxcursor-dev libxrandr-dev libgl1-mesa-dev libfontconfig1-dev libgtk-3-dev \
+  libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
+```
+
+Then run tests, linter, or build the optimized release binary:
 
 ```bash
 # Run the full workspace test suite
@@ -84,8 +103,8 @@ LuminaCalc/
 │   └── tests/
 │       └── integration.rs      # End-to-end core integration tests
 └── lumina-ui/                  # Desktop UI built on eframe / egui
-    ├── build.rs                # Embeds multi-resolution icon.ico into Windows PE resources
-    ├── assets/                 # icon.png (256x256), icon.ico (16..256px), icon.rc
+    ├── build.rs                # Embeds multi-resolution icon.ico on Windows
+    ├── assets/                 # icon.png, icon.ico, icon.rc, luminacalc.desktop
     └── src/
         ├── main.rs             # eframe entry point, frameless viewport, window/taskbar icon
         ├── app.rs              # Root state, shortcuts, clipboard, debounced TOML persistence

@@ -11,7 +11,7 @@ eframe = "0.37.0"
 egui = "0.37.0"
 egui_plot = "0.38.0"
 global-hotkey = "0.10.0"
-lumina-core = { version = "0.2.0", path = "../lumina-core" }
+lumina-core = { version = "0.2.1", path = "../lumina-core" }
 serde = { version = "1.0.229", features = ["derive"] }
 sys-locale = "0.3.2"
 toml = "1.2.2"
