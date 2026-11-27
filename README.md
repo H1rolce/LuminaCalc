@@ -2,7 +2,7 @@
 
 **English** | [Русский](README.ru.md)
 
-**LuminaCalc** is a fast, native cross-platform desktop calculator built in Rust (`egui` / `eframe`) for **Windows** and **Linux**, combining four calculation modes in a single lightweight window with Dark / Light theming (plus automatic system accent color on Windows) and bilingual UI (EN / RU).
+**LuminaCalc** is a desktop calculator written in Rust (`egui` / `eframe`) for Windows and Linux. It puts four calculation modes in one window, supports dark and light themes (with automatic system accent color on Windows), and comes with an English and Russian UI.
 
 ![LuminaCalc Preview](preview.gif)
 
@@ -12,25 +12,25 @@
 
 ## Features
 
-- **Notebook (Soulver / Numi style)** — reactive multi-line calculations with variables, line references (`#1`, `#2`), block aggregates (`sum`, `avg`), physical unit conversions (`120 km/h in m/s`, `22 °C in °F`), and radix/scientific conversions (`255 in hex`).
-- **Scientific Calculator (Casio ClassWiz / fx-991ES PLUS style)** — interactive 2D Natural-V.P.A.M. display with multi-story fractions, balanced parentheses inside fractions (`((2+5)*2)/(3)`), mouse-clickable caret positioning, `SHIFT`, `HYP`, `DEG/RAD/GRAD`, `S⇔D`, `a b/c`, `ENG`, `CONST`, memory (`MC/MR/M-/M+/STO`), `Ans` chaining after `=`, automatic parenthesis closing, smart multi-token `DEL`, and persistent calculation history.
-- **2D Function Plotter** — multi-curve plotting on `egui_plot`, auto-generated parameter sliders (`y = a * sin(b * x)`) with smooth animation, discontinuity/asymptote splitting (`1/x`, `tan(x)`), and magnetic cursor snapping to roots, extrema, Y-intercepts, and curve intersections.
-- **Programmer & Unit Converter** — 64/32/16/8-bit register (`HEX`/`DEC`/`OCT`/`BIN`, signed/unsigned, bitwise ops, clickable & drag-paintable 64-bit grid) plus an engineering unit converter.
-- **Desktop Integration** — native cross-platform desktop experience for **Windows** and **Linux** (Wayland / X11 with `app_id = "luminacalc"` and `.desktop` launcher), live system accent color reading on Windows (`DWM\AccentColor`), debounced TOML state persistence, global summon hotkey (`Ctrl+Alt+Space`), always-on-top mode, and embedded multi-resolution icons.
+- **Notebook (Soulver / Numi style).** Multi-line calculations that update as you type: variables, line references (`#1`, `#2`), block aggregates (`sum`, `avg`), physical unit conversions (`120 km/h in m/s`, `22 °C in °F`), and base conversions (`255 in hex`).
+- **Scientific Calculator (Casio ClassWiz / fx-991ES PLUS style).** Interactive 2D Natural-V.P.A.M. display with nested fractions, balanced parentheses inside fractions (`((2+5)*2)/(3)`), and clickable caret placement. Includes `SHIFT`, `HYP`, `DEG/RAD/GRAD`, `S⇔D`, `a b/c`, `ENG`, `CONST`, memory (`MC/MR/M-/M+/STO`), `Ans` chaining after `=`, automatic parenthesis closing, token-aware `DEL`, and saved history.
+- **2D Function Plotter.** Multiple curves on `egui_plot`, automatic sliders for free parameters (`y = a * sin(b * x)`) with animation, discontinuity splitting around asymptotes (`1/x`, `tan(x)`), and cursor snapping to roots, extrema, Y-intercepts, and curve intersections.
+- **Programmer & Unit Converter.** 64/32/16/8-bit register (`HEX`/`DEC`/`OCT`/`BIN`, signed and unsigned, bitwise ops, clickable and drag-paintable 64-bit grid) alongside an engineering unit converter.
+- **Desktop Integration.** Works on Windows and Linux (Wayland / X11 with `app_id = "luminacalc"` and a `.desktop` entry). Reads the Windows accent color from `DWM\AccentColor`, persists state to TOML, supports a global summon shortcut (`Ctrl+Alt+Space`), always-on-top mode, and ships with embedded multi-resolution icons.
 
 ---
 
 ## Download
 
-Prebuilt x86_64 binaries for **Windows** and **Linux** are available on the [**Latest Release**](https://github.com/H1rolce/LuminaCalc/releases/latest) page (see also [all releases](https://github.com/H1rolce/LuminaCalc/releases)):
+Grab x86_64 binaries for Windows and Linux from the [**Latest Release**](https://github.com/H1rolce/LuminaCalc/releases/latest) page (or browse [all releases](https://github.com/H1rolce/LuminaCalc/releases)):
 
-- **Windows:** `LuminaCalc-windows-x86_64.zip` — portable `LuminaCalc.exe`, extract and run.
-- **Linux (AppImage):** `LuminaCalc-linux-x86_64.AppImage` — universal portable package:
+- **Windows:** `LuminaCalc-windows-x86_64.zip` — portable `LuminaCalc.exe`, unzip and run.
+- **Linux (AppImage):** `LuminaCalc-linux-x86_64.AppImage` — standalone portable image:
   ```bash
   chmod +x LuminaCalc-linux-x86_64.AppImage
   ./LuminaCalc-linux-x86_64.AppImage
   ```
-- **Linux (tar.gz):** `LuminaCalc-linux-x86_64.tar.gz` — native binary `luminacalc`, `luminacalc.desktop` entry, and `luminacalc.png` icon.
+- **Linux (tar.gz):** `LuminaCalc-linux-x86_64.tar.gz` — `luminacalc` binary, `luminacalc.desktop` launcher, and `luminacalc.png` icon.
 
 ---
 
@@ -55,7 +55,7 @@ Prebuilt x86_64 binaries for **Windows** and **Linux** are available on the [**L
 
 Requires Rust (`edition = 2024`).
 
-On **Linux (Ubuntu / Debian)**, install the required system development libraries first:
+On **Linux (Ubuntu / Debian)**, install the system development libraries first:
 
 ```bash
 sudo apt-get update
@@ -64,7 +64,7 @@ sudo apt-get install -y pkg-config libxkbcommon-dev libwayland-dev libx11-dev li
   libxcb-render0-dev libxcb-shape0-dev libxcb-xfixes0-dev
 ```
 
-Then run tests, linter, or build the optimized release binary:
+Then run tests, Clippy, or build the release binary:
 
 ```bash
 # Run the full workspace test suite
@@ -81,7 +81,7 @@ cargo build --release -p lumina-ui
 
 ## Architecture
 
-The project is structured as a **Cargo Workspace** with strict separation between the headless math engine and the GUI layer:
+The workspace is split into two crates: the headless math engine (`lumina-core`) and the GUI (`lumina-ui`).
 
 ```text
 LuminaCalc/
@@ -141,35 +141,35 @@ flowchart LR
 
 ---
 
-## Key Technical Highlights
+## Implementation Notes
 
 ### 1. Exact Arithmetic & Trigonometry (`lumina-core`)
-- Core arithmetic uses 96-bit `rust_decimal::Decimal`, eliminating IEEE 754 representation artifacts (`0.1 + 0.2 = 0.3`).
-- Transcendental functions compute in `f64` rounded to 15 significant digits. In `Deg` and `Grad` modes, angles are reduced modulo `360` / `400` in `Decimal` first: `sin(180°)` and `cos(90°)` are strictly `0`, while poles (`tan(90°)`, `tan(π/2)`, `cot(180°)`) return `ErrorKind::Domain` (`Math ERROR`).
-- Negative zero (`-0`) is normalized away at the `Decimal` and formatting layers.
-- Every error carries a byte `Span` and is classified via `ErrorCategory::{Syntax, Math}` — zero `.unwrap()` / `.expect()` on user input and no leaking `NaN`/`Infinity` in the UI.
+- Basic arithmetic runs on 96-bit `rust_decimal::Decimal`, so floating-point quirks like `0.1 + 0.2 != 0.3` do not happen (`0.1 + 0.2 = 0.3`).
+- Transcendental functions evaluate in `f64` and round to 15 significant digits. In `Deg` and `Grad` modes, angles are reduced modulo `360` / `400` in `Decimal` first: `sin(180°)` and `cos(90°)` return exact `0`, while poles (`tan(90°)`, `tan(π/2)`, `cot(180°)`) return `ErrorKind::Domain` (`Math ERROR`).
+- Negative zero (`-0`) is normalized away both in `Decimal` and during formatting.
+- Every error carries a byte `Span` and an `ErrorCategory::{Syntax, Math}`. User input never hits `.unwrap()` or `.expect()`, and `NaN` / `Infinity` never leak into the UI.
 
 ### 2. Parser & Precedence (Casio ClassWiz)
 - Precedence (low to high): `in`-conversion → `|` → `xor` → `&` → `<<`/`>>` → `+`/`-` → `*`/`/`/`mod`/`of`/`%` → implicit multiplication (`2(3+4)`, `(2+3)(4+5)`, `(2+3)2`, `2pi`, `3sin(30)`, `2Ans`, `1/2pi = 1/(2π)`) → unary `-`/`+`/`~` → `^` (right-associative: `2^3^2 = 512`, `-2^2 = -4`) → postfix `!`, `%`, `²`, `³` → primaries.
-- `auto_close_parens` automatically balances trailing open parentheses on `=` in Scientific mode (`sin(30` → `sin(30)`).
+- `auto_close_parens` closes trailing open parentheses when you press `=` in Scientific mode (`sin(30` → `sin(30)`).
 
 ### 3. Dimensional Analysis (`units.rs`)
-- Physical dimensions are represented as a compact 8-byte exponent vector `Dim([i8; 8])` (length, mass, time, current, temperature, amount, luminous intensity, information in bits).
-- Offset temperature scales (`°C`, `°F`) convert accurately through Kelvin without precision drift.
+- Physical dimensions are stored as an 8-byte exponent vector `Dim([i8; 8])` (length, mass, time, current, temperature, amount, luminous intensity, information in bits).
+- Offset temperature scales (`°C`, `°F`) convert through Kelvin without precision drift.
 
 ### 4. Interactive 2D Natural-V.P.A.M. Renderer (`math_display.rs` + `sci_view.rs`)
-- A resilient 2D parser builds a spanned `MathNode` tree (`Frac`, `Sup`, `Sqrt`, `Paren`, `Slot`) even for incomplete expressions.
-- Painting collects clickable `HitZone` rectangles and exact `CaretPos` geometry so users can click directly inside numerators, denominators, or between digits.
-- The parsed `MathNode` tree is cached inside `ScientificView`, avoiding re-parsing on cursor blink ticks.
+- A dedicated 2D parser builds a spanned `MathNode` tree (`Frac`, `Sup`, `Sqrt`, `Paren`, `Slot`) even while an expression is incomplete.
+- Painting records clickable `HitZone` rectangles and `CaretPos` coordinates, so you can click directly inside a numerator, denominator, or between digits.
+- `ScientificView` caches the parsed `MathNode` tree instead of re-parsing on every cursor blink.
 
-### 5. UI Performance & Caching
-- **Notebook:** caches `LayoutJob` keyed by `(doc_version, theme, accent, font_size, wrap_width)` (avoiding stale glyph-atlas UVs) along with formatted result strings.
-- **Plotter:** caches sampled curve segments and snap points by `(version, bounds)` and passes them via `PlotPoints::Borrowed` with zero per-frame copies.
-- **Programmer:** caches unit converter evaluations by `(cat, from, to, val)`.
-- **Idle Efficiency:** debounced TOML saves (`0.8s`) and toast notifications use `request_repaint_after` so idle CPU/GPU usage stays near zero.
+### 5. UI Caching & Idle Behavior
+- **Notebook:** caches `LayoutJob` by `(doc_version, theme, accent, font_size, wrap_width)` (avoiding stale glyph-atlas UVs) together with formatted result strings.
+- **Plotter:** caches sampled curve segments and snap points by `(version, bounds)` and passes them via `PlotPoints::Borrowed` without per-frame copies.
+- **Programmer:** caches unit converter results by `(cat, from, to, val)`.
+- **Idle behavior:** debounced TOML saves (`0.8s`) and toast notifications schedule repaints with `request_repaint_after`, keeping idle CPU and GPU usage near zero.
 
 ---
 
 ## License
 
-Licensed under the **MIT License**. See [LICENSE](LICENSE) for details.
+MIT License. See [LICENSE](LICENSE) for details.
