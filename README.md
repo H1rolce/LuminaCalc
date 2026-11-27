@@ -1,7 +1,4 @@
-<h1>
-  <img src="lumina-ui/assets/icon.png" width="36" height="36" align="absmiddle" alt="LuminaCalc" />
-  LuminaCalc
-</h1>
+# <img src="lumina-ui/assets/icon.png" alt="LuminaCalc" width="40" height="40" align="left" />&nbsp;LuminaCalc
 
 **English** | [Русский](README.ru.md)
 
