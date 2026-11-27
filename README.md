@@ -38,7 +38,7 @@ Prebuilt x86_64 binaries for Windows and Linux are available on the [**Latest Re
 
 | Shortcut | Action |
 |---|---|
-| `Ctrl+Alt+Space` | Global summon / focus window |
+| `Ctrl+Alt+Space` | Global summon / focus window (Windows / X11; on Wayland configure via compositor) |
 | `Ctrl+1` … `Ctrl+4` | Switch tabs (Notebook / Scientific / Plotter / Programmer) |
 | `Ctrl++` / `Ctrl+-` | Increase / decrease Notebook font size |
 | `S` / `Shift+S` / `Ctrl+S` | Scientific: `sin(` / `asin(` / `sinh(` (layout-independent) |
