@@ -334,7 +334,12 @@ impl ScientificView {
         match self.display_mode {
             DisplayMode::Fraction => {
                 if let Some((num, den)) = decimal_to_fraction(val.si, 10_000) {
-                    (format!("{num}/{den}"), Some(format!("≈ {dec}")))
+                    let prefix = if is_exact_fraction_decimal(val, num, den, &dec, precision) {
+                        "="
+                    } else {
+                        "≈"
+                    };
+                    (format!("{num}/{den}"), Some(format!("{prefix} {dec}")))
                 } else {
                     (dec, None)
                 }
@@ -348,7 +353,12 @@ impl ScientificView {
                     } else {
                         format!("{num}/{den}")
                     };
-                    (txt, Some(format!("≈ {dec}")))
+                    let prefix = if is_exact_fraction_decimal(val, num, den, &dec, precision) {
+                        "="
+                    } else {
+                        "≈"
+                    };
+                    (txt, Some(format!("{prefix} {dec}")))
                 } else {
                     (dec, None)
                 }
@@ -2090,6 +2100,23 @@ impl ScientificView {
     }
 }
 
+fn is_exact_fraction_decimal(val: &Value, num: i64, den: i64, dec: &str, precision: u32) -> bool {
+    if den <= 0 || dec.contains('e') || dec.contains('E') {
+        return false;
+    }
+    let norm = val.si.normalize();
+    let scale = norm.scale();
+    if scale > precision {
+        return false;
+    }
+    let Some(pow10) = 10i128.checked_pow(scale) else {
+        return false;
+    };
+    let lhs = norm.mantissa().checked_mul(den as i128);
+    let rhs = (num as i128).checked_mul(pow10);
+    lhs.is_some() && lhs == rhs
+}
+
 fn map_sci_hotkey(key: Key, modifiers: egui::Modifiers) -> Option<SciHotkey> {
     if modifiers.alt {
         return None;
@@ -3007,5 +3034,44 @@ mod tests {
         btn.execute_key_action(KeyAction::Fraction { mixed: false }, 8);
         assert_eq!(btn.expr, "()/()");
         assert!(matches!(math_display::parse_math(&btn.expr), MathNode::Frac { .. }));
+    }
+
+    #[test]
+    fn fraction_preview_uses_exact_equals_for_terminating_decimals_and_approx_for_repeating() {
+        let mut v = ScientificView::default();
+
+        for (expr, prec, expected_main, expected_alt) in [
+            ("1 ÷ 2", 8, "1/2", "= 0.5"),
+            ("1 ÷ 4", 8, "1/4", "= 0.25"),
+            ("-3 ÷ 8", 8, "-3/8", "= -0.375"),
+            ("(cos(60) ÷ 20)/(2)", 8, "1/80", "= 0.0125"),
+            ("1 ÷ 3", 8, "1/3", "≈ 0.33333333"),
+            ("2 ÷ 3", 8, "2/3", "≈ 0.66666667"),
+            ("1 ÷ 8", 2, "1/8", "≈ 0.13"),
+            ("1 ÷ 8", 3, "1/8", "= 0.125"),
+        ] {
+            v.clear_all();
+            v.display_mode = DisplayMode::Fraction;
+            v.insert_token(expr, true);
+            let val = v.last_eval.as_ref().expect("eval").as_ref().expect("ok");
+            let (main, alt) = v.format_value_text(val, prec);
+            assert_eq!(main, expected_main, "expr={expr}");
+            assert_eq!(alt.as_deref(), Some(expected_alt), "expr={expr}, prec={prec}");
+        }
+
+        v.clear_all();
+        v.display_mode = DisplayMode::MixedFraction;
+        v.insert_token("3 ÷ 2", true);
+        let val = v.last_eval.as_ref().expect("eval").as_ref().expect("ok");
+        assert_eq!(v.format_value_text(val, 8), ("1 1/2".to_owned(), Some("= 1.5".to_owned())));
+
+        v.clear_all();
+        v.display_mode = DisplayMode::MixedFraction;
+        v.insert_token("7 ÷ 3", true);
+        let val = v.last_eval.as_ref().expect("eval").as_ref().expect("ok");
+        assert_eq!(
+            v.format_value_text(val, 8),
+            ("2 1/3".to_owned(), Some("≈ 2.33333333".to_owned()))
+        );
     }
 }
