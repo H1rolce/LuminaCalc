@@ -109,28 +109,34 @@ pub const RU: Strings = Strings {
     nb_click_to_copy: "ЛКМ — копировать • ПКМ — действия",
     nb_copied: "Скопировано",
     nb_default_doc: "\
-# Расчёт поездки и конвертация единиц
+# Физика и конвертация единиц
 dist = 420 км
 speed = 120 км/ч
 speed в м/с
 time = dist / speed в мин
 
-# Точная десятичная арифметика и проценты
+# Точная арифметика и проценты
 0.1 + 0.2
 price = 2490
-price + 20%
-15% от price
+price - 15%
+20% от price
 
-# Ссылки на строки и итоги блока
+# Геометрия и константы
+r = 5 см
+area = pi * r^2 в см^2
+sin(30°) + cos(60°)
+
+# Итоги блока и ссылки на строки
 120
 340
 540
 сумма
 среднее
-#13 + #14
+#22 + #23
 
-# Программистский формат и температура
+# Программист и данные
 (0xFF << 4) | 0x0A в hex
+1 GiB в MB
 22 °C в °F",
 
     plot_functions: "Функции",
@@ -187,28 +193,34 @@ pub const EN: Strings = Strings {
     nb_click_to_copy: "Left click to copy • Right click for actions",
     nb_copied: "Copied",
     nb_default_doc: "\
-# Trip calculation & unit conversions
+# Physics & Unit Conversions
 dist = 420 km
 speed = 120 km/h
 speed in m/s
 time = dist / speed in min
 
-# Exact decimal math & percentages
+# Exact Decimal & Percentages
 0.1 + 0.2
 price = 2490
-price + 20%
-15% of price
+price - 15%
+20% of price
 
-# Line references & block aggregates
+# Geometry & Constants
+r = 5 cm
+area = pi * r^2 in cm^2
+sin(30°) + cos(60°)
+
+# Block Aggregates & Line Refs
 120
 340
 540
 sum
 avg
-#13 + #14
+#22 + #23
 
-# Programmer formats & temperature
+# Programmer & Data
 (0xFF << 4) | 0x0A in hex
+1 GiB in MB
 22 °C in °F",
 
     plot_functions: "Functions",

@@ -260,6 +260,12 @@ impl NotebookView {
                 if let Some(t) = cur_top {
                     line_bands.push((t, cur_bot.max(t + min_h)));
                 }
+                for idx in 0..line_bands.len().saturating_sub(1) {
+                    let next_top = line_bands[idx + 1].0;
+                    if line_bands[idx].1 > next_top {
+                        line_bands[idx].1 = next_top.max(line_bands[idx].0);
+                    }
+                }
 
                 if let Some(&(y0, y1)) = line_bands.get(self.active_line) {
                     let highlight_rect = Rect::from_min_max(
@@ -313,9 +319,10 @@ impl NotebookView {
 
                     let res_left = divider_x + 8.0;
                     let res_right = (scroll_top_left.x + total_w - 10.0).max(res_left);
+                    let pad_y = if y1 - y0 >= 4.0 { 0.5 } else { 0.0 };
                     let res_rect = Rect::from_min_max(
-                        Pos2::new(res_left, y0 - 1.0),
-                        Pos2::new(res_right, y1 + 1.0),
+                        Pos2::new(res_left, y0 + pad_y),
+                        Pos2::new(res_right, (y1 - pad_y).max(y0 + pad_y)),
                     );
                     let text_clip = Rect::from_min_max(
                         Pos2::new((res_rect.left() + 6.0).min(res_rect.right()), res_rect.top()),
@@ -414,7 +421,7 @@ impl NotebookView {
                         LineOutput::Error(err) => {
                             let msg = format_error(lang, &err.kind);
                             let resp = ui
-                                .interact(res_rect, Id::unique(("nb_err", i)), Sense::hover())
+                                .interact(res_rect, Id::unique(("nb_err", i)), Sense::click())
                                 .on_hover_text(&msg);
 
                             let hover_t = ui.ctx().animate_bool_with_time(resp.id, resp.hovered(), 0.10);
@@ -684,5 +691,55 @@ avg
         let nb = Notebook::from_text("22 °C in °F\r\nошибка = 1 +\r\n");
         let job = style::build_notebook_layout_job(nb.text(), nb.lines(), 15.0, 500.0, &palette);
         assert_eq!(job.text, nb.text());
+    }
+
+    #[test]
+    fn default_notebook_docs_evaluate_without_errors() {
+        for lang in [Lang::En, Lang::Ru] {
+            let doc = tr(lang).nb_default_doc;
+            let nb = Notebook::from_text(doc);
+            assert_eq!(nb.lines().len(), 29, "lang={lang:?}");
+            for (idx, line) in nb.lines().iter().enumerate() {
+                assert!(
+                    !matches!(line.output, LineOutput::Error(_)),
+                    "lang={lang:?} line {} ('{}') failed: {:?}",
+                    idx + 1,
+                    line.source,
+                    line.output
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn adjacent_value_and_error_rows_never_hover_simultaneously() {
+        let ctx = egui::Context::default();
+        style::install_fonts(&ctx);
+        let palette = style::apply_theme(&ctx, ThemeId::Dark);
+        let mut view = NotebookView::new("100 + 200\n#13 + #14".to_owned());
+        let mut precision = 8u32;
+
+        let mut hovered_pairs = 0usize;
+        for step in 0..80 {
+            let y = 10.0 + step as f32 * 0.5;
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::Vec2::new(900.0, 400.0))),
+                events: vec![egui::Event::PointerMoved(Pos2::new(760.0, y))],
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let _ = view.show(ui, ThemeId::Dark, Lang::Ru, 15.0, &mut precision, &palette);
+                });
+            });
+            out.textures_delta.clear();
+
+            let val_hovered = ctx.read_response(Id::unique(("nb_res", 0usize))).is_some_and(|r| r.hovered());
+            let err_hovered = ctx.read_response(Id::unique(("nb_err", 1usize))).is_some_and(|r| r.hovered());
+            if val_hovered && err_hovered {
+                hovered_pairs += 1;
+            }
+        }
+        assert_eq!(hovered_pairs, 0, "adjacent Value and Error rows must never hover at the same time");
     }
 }
