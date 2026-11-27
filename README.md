@@ -2,7 +2,7 @@
 
 **English** | [Русский](README.ru.md)
 
-**LuminaCalc** is a desktop calculator written in Rust (`egui` / `eframe`) for Windows and Linux. It puts four calculation modes in one window, supports dark and light themes (with automatic system accent color on Windows), and comes with an English and Russian UI.
+**LuminaCalc** is a desktop calculator written in Rust (`egui` / `eframe`) for Windows and Linux. It combines four calculation modes in a single window, supports dark and light themes (with automatic system accent color on Windows), and provides an English and Russian interface.
 
 ![LuminaCalc Preview](preview.gif)
 
@@ -22,9 +22,9 @@
 
 ## Download
 
-Grab x86_64 binaries for Windows and Linux from the [**Latest Release**](https://github.com/H1rolce/LuminaCalc/releases/latest) page (or browse [all releases](https://github.com/H1rolce/LuminaCalc/releases)):
+Prebuilt x86_64 binaries for Windows and Linux are available on the [**Latest Release**](https://github.com/H1rolce/LuminaCalc/releases/latest) page (see also [all releases](https://github.com/H1rolce/LuminaCalc/releases)):
 
-- **Windows:** `LuminaCalc-windows-x86_64.zip` — portable `LuminaCalc.exe`, unzip and run.
+- **Windows:** `LuminaCalc-windows-x86_64.zip` — portable `LuminaCalc.exe`, extract and run.
 - **Linux (AppImage):** `LuminaCalc-linux-x86_64.AppImage` — standalone portable image:
   ```bash
   chmod +x LuminaCalc-linux-x86_64.AppImage
@@ -141,26 +141,26 @@ flowchart LR
 
 ---
 
-## Implementation Notes
+## Technical Details
 
 ### 1. Exact Arithmetic & Trigonometry (`lumina-core`)
-- Basic arithmetic runs on 96-bit `rust_decimal::Decimal`, so floating-point quirks like `0.1 + 0.2 != 0.3` do not happen (`0.1 + 0.2 = 0.3`).
+- Core arithmetic runs on 96-bit `rust_decimal::Decimal`, avoiding IEEE 754 floating-point rounding artifacts (`0.1 + 0.2 = 0.3`).
 - Transcendental functions evaluate in `f64` and round to 15 significant digits. In `Deg` and `Grad` modes, angles are reduced modulo `360` / `400` in `Decimal` first: `sin(180°)` and `cos(90°)` return exact `0`, while poles (`tan(90°)`, `tan(π/2)`, `cot(180°)`) return `ErrorKind::Domain` (`Math ERROR`).
 - Negative zero (`-0`) is normalized away both in `Decimal` and during formatting.
-- Every error carries a byte `Span` and an `ErrorCategory::{Syntax, Math}`. User input never hits `.unwrap()` or `.expect()`, and `NaN` / `Infinity` never leak into the UI.
+- Every error carries a byte `Span` and an `ErrorCategory::{Syntax, Math}`. User input never hits `.unwrap()` or `.expect()`, and `NaN` / `Infinity` never appear in the UI.
 
 ### 2. Parser & Precedence (Casio ClassWiz)
 - Precedence (low to high): `in`-conversion → `|` → `xor` → `&` → `<<`/`>>` → `+`/`-` → `*`/`/`/`mod`/`of`/`%` → implicit multiplication (`2(3+4)`, `(2+3)(4+5)`, `(2+3)2`, `2pi`, `3sin(30)`, `2Ans`, `1/2pi = 1/(2π)`) → unary `-`/`+`/`~` → `^` (right-associative: `2^3^2 = 512`, `-2^2 = -4`) → postfix `!`, `%`, `²`, `³` → primaries.
-- `auto_close_parens` closes trailing open parentheses when you press `=` in Scientific mode (`sin(30` → `sin(30)`).
+- `auto_close_parens` balances trailing open parentheses on `=` in Scientific mode (`sin(30` → `sin(30)`).
 
 ### 3. Dimensional Analysis (`units.rs`)
 - Physical dimensions are stored as an 8-byte exponent vector `Dim([i8; 8])` (length, mass, time, current, temperature, amount, luminous intensity, information in bits).
 - Offset temperature scales (`°C`, `°F`) convert through Kelvin without precision drift.
 
 ### 4. Interactive 2D Natural-V.P.A.M. Renderer (`math_display.rs` + `sci_view.rs`)
-- A dedicated 2D parser builds a spanned `MathNode` tree (`Frac`, `Sup`, `Sqrt`, `Paren`, `Slot`) even while an expression is incomplete.
-- Painting records clickable `HitZone` rectangles and `CaretPos` coordinates, so you can click directly inside a numerator, denominator, or between digits.
-- `ScientificView` caches the parsed `MathNode` tree instead of re-parsing on every cursor blink.
+- A dedicated 2D parser builds a spanned `MathNode` tree (`Frac`, `Sup`, `Sqrt`, `Paren`, `Slot`) even for incomplete expressions.
+- Rendering records clickable `HitZone` rectangles and `CaretPos` coordinates for direct cursor placement inside numerators, denominators, or between digits.
+- `ScientificView` caches the parsed `MathNode` tree rather than re-parsing on cursor blink ticks.
 
 ### 5. UI Caching & Idle Behavior
 - **Notebook:** caches `LayoutJob` by `(doc_version, theme, accent, font_size, wrap_width)` (avoiding stale glyph-atlas UVs) together with formatted result strings.

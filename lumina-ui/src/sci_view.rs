@@ -893,10 +893,14 @@ impl ScientificView {
                             hotkeys.push(hk);
                         }
                         Event::Text(text) => {
-                            let filtered: String = text
-                                .chars()
-                                .filter(|&c| is_allowed_sci_char(c))
-                                .collect();
+                            let mut filtered = String::with_capacity(text.len());
+                            for c in text.chars() {
+                                if c == '/' {
+                                    filtered.push('÷');
+                                } else if is_allowed_sci_char(c) {
+                                    filtered.push(c);
+                                }
+                            }
                             if !filtered.is_empty() {
                                 kept.push(Event::Text(filtered));
                             }
@@ -1023,21 +1027,7 @@ impl ScientificView {
                 DirectEvent::Hotkey(hk) => self.execute_sci_hotkey(hk, precision),
                 DirectEvent::Paste(s) => self.paste_text(&s),
                 DirectEvent::Char(ch) => match ch {
-                    '÷' => self.insert_token_mode(" ÷ ", AfterCommit::ChainAns),
-                    '/' => {
-                        if self.committed && self.ans.is_some() {
-                            self.push_undo();
-                            self.expr = "(Ans)/()".to_owned();
-                            self.cursor = self.expr.len() - 1;
-                            self.committed = false;
-                            self.history_cursor = None;
-                            self.recompute();
-                        } else if self.enclosing_fraction().is_some() {
-                            self.insert_token_mode(" ÷ ", AfterCommit::ChainAns);
-                        } else {
-                            self.insert_fraction(false);
-                        }
-                    }
+                    '/' | '÷' => self.insert_token_mode(" ÷ ", AfterCommit::ChainAns),
                     '(' => self.insert_open_paren(),
                     ')' => self.insert_close_paren(),
                     _ => {
@@ -1830,7 +1820,7 @@ impl ScientificView {
                     main: KeyAction::Fraction { mixed: false },
                     shift: KeyAction::Fraction { mixed: true },
                     tone: KeyTone::Sci,
-                    tooltip: "/",
+                    tooltip: "",
                 },
                 KeySpec::sci("x⁻¹", "x!", ins_chain("^(-1)"), ins_chain("!")),
                 KeySpec::sci("√", "∛", ins_new("sqrt("), ins_new("cbrt(")).with_tip("R: √("),
@@ -1929,7 +1919,8 @@ impl ScientificView {
                 KeySpec::num("5", "hypot", ins_new("5"), ins_new("hypot("), KeyTone::Digit),
                 KeySpec::num("6", "round", ins_new("6"), ins_new("round("), KeyTone::Digit),
                 KeySpec::num("×", "xʸ", ins_chain(" * "), ins_chain("^"), KeyTone::Op),
-                KeySpec::num("÷", "mod", ins_chain(" ÷ "), ins_chain(" mod "), KeyTone::Op),
+                KeySpec::num("÷", "mod", ins_chain(" ÷ "), ins_chain(" mod "), KeyTone::Op)
+                    .with_tip("/"),
             ],
             [
                 KeySpec::num("1", "floor", ins_new("1"), ins_new("floor("), KeyTone::Digit),
@@ -2965,5 +2956,56 @@ mod tests {
         let mut del = ScientificView { expr: "(cos(60) ÷ )/(2)".to_owned(), cursor: 12, ..Default::default() };
         del.backspace();
         assert_eq!(del.expr, "(cos(60))/(2)");
+    }
+
+    #[test]
+    fn slash_key_never_creates_stacked_fraction_only_fraction_button_does() {
+        let ctx = egui::Context::default();
+        let palette = style::apply_theme(&ctx, crate::style::ThemeId::Dark);
+        let mut v = ScientificView::default();
+
+        let type_div = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, Vec2::new(1040.0, 680.0))),
+            events: vec![Event::Text("10/2".to_owned())],
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(type_div, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let _ = v.show(ui, Lang::Ru, 8, &palette);
+            });
+        });
+        out.textures_delta.clear();
+
+        assert_eq!(v.expr, "10 ÷ 2");
+        assert!(
+            !matches!(math_display::parse_math(&v.expr), MathNode::Frac { .. }),
+            "typing '/' must not create a stacked fraction"
+        );
+        assert_eq!(v.last_eval.as_ref().expect("eval").as_ref().expect("ok").plain(8), "5");
+
+        v.evaluate_commit(8);
+        let chain_div = egui::RawInput {
+            screen_rect: Some(egui::Rect::from_min_size(Pos2::ZERO, Vec2::new(1040.0, 680.0))),
+            events: vec![Event::Text("/2".to_owned())],
+            ..Default::default()
+        };
+        let mut out = ctx.run_ui(chain_div, |ui| {
+            egui::CentralPanel::default().show(ui, |ui| {
+                let _ = v.show(ui, Lang::Ru, 8, &palette);
+            });
+        });
+        out.textures_delta.clear();
+
+        assert_eq!(v.expr, "Ans ÷ 2");
+        assert!(
+            !matches!(math_display::parse_math(&v.expr), MathNode::Frac { .. }),
+            "typing '/' after '=' must chain inline ÷, not a stacked fraction"
+        );
+        assert_eq!(v.last_eval.as_ref().expect("eval").as_ref().expect("ok").plain(8), "2.5");
+
+        let mut btn = ScientificView::default();
+        btn.execute_key_action(KeyAction::Fraction { mixed: false }, 8);
+        assert_eq!(btn.expr, "()/()");
+        assert!(matches!(math_display::parse_math(&btn.expr), MathNode::Frac { .. }));
     }
 }
