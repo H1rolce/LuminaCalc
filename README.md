@@ -1,4 +1,4 @@
-# <img src="lumina-ui/assets/icon.png" alt="LuminaCalc" width="36" align="absmiddle" /> LuminaCalc
+# <img src="lumina-ui/assets/icon.png" alt="LuminaCalc" width="52" align="absmiddle" /> LuminaCalc
 
 **English** | [Русский](README.ru.md)
 
