@@ -477,46 +477,12 @@ impl NotebookView {
                 bottom: 14,
             })
             .show(ui, |ui| {
-                ui.horizontal(|ui| {
-                    ui.label(
-                        egui::RichText::new(s.nb_vars_label)
-                            .size(12.0)
-                            .color(palette.text_muted),
-                    );
-
-                    let mut vars: Vec<(&str, String)> = self
-                        .notebook
-                        .env()
-                        .vars
-                        .iter()
-                        .map(|(k, v)| (k.as_ref(), v.plain(4)))
-                        .collect();
-                    vars.sort_by(|a, b| a.0.cmp(b.0));
-
-                    if vars.is_empty() {
-                        ui.label(
-                            egui::RichText::new(s.nb_no_vars)
-                                .size(12.0)
-                                .color(palette.text_muted),
-                        );
-                    } else {
-                        for (name, val) in vars.iter().take(6) {
-                            let label = format!("{name} = {val}");
-                            let resp = style::paint_pill(
-                                ui,
-                                &label,
-                                palette.bg_surface,
-                                palette.syn_assign,
-                                Stroke::new(1.0, palette.border_subtle),
-                                11.5,
-                            );
-                            if resp.clicked() {
-                                self.pending_insert = Some((*name).to_owned());
-                            }
-                        }
-                    }
-
-                    ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                let row_w = ui.available_width();
+                let row_h = 24.0;
+                ui.allocate_ui_with_layout(
+                    egui::vec2(row_w, row_h),
+                    egui::Layout::right_to_left(egui::Align::Center),
+                    |ui| {
                         if ui.button(egui::RichText::new(s.nb_clear).size(12.0)).clicked() {
                             self.text.clear();
                             self.notebook.sync("");
@@ -538,8 +504,107 @@ impl NotebookView {
                                 .size(12.0)
                                 .color(palette.text_secondary),
                         );
-                    });
-                });
+                        ui.add_space(10.0);
+
+                        let left_rect = ui.available_rect_before_wrap();
+                        if left_rect.width() <= 8.0 {
+                            return;
+                        }
+
+                        ui.allocate_ui_with_layout(
+                            egui::vec2(left_rect.width(), row_h),
+                            egui::Layout::left_to_right(egui::Align::Center),
+                            |ui| {
+                                ui.set_clip_rect(ui.clip_rect().intersect(left_rect));
+                                ui.label(
+                                    egui::RichText::new(s.nb_vars_label)
+                                        .size(12.0)
+                                        .color(palette.text_muted),
+                                );
+
+                                let mut vars: Vec<(&str, String)> = self
+                                    .notebook
+                                    .env()
+                                    .vars
+                                    .iter()
+                                    .map(|(k, v)| (k.as_ref(), v.plain(4)))
+                                    .collect();
+                                vars.sort_by(|a, b| a.0.cmp(b.0));
+
+                                if vars.is_empty() {
+                                    if ui.available_width() > 36.0 {
+                                        ui.label(
+                                            egui::RichText::new(s.nb_no_vars)
+                                                .size(12.0)
+                                                .color(palette.text_muted),
+                                        );
+                                    }
+                                    return;
+                                }
+
+                                let gap = ui.spacing().item_spacing.x;
+                                let pill_font = FontId::proportional(11.5);
+                                let pill_w = |painter: &egui::Painter, text: &str| -> f32 {
+                                    painter
+                                        .layout_no_wrap(text.to_owned(), pill_font.clone(), palette.syn_assign)
+                                        .size()
+                                        .x
+                                        + 20.0
+                                };
+
+                                let total = vars.len();
+                                let mut shown = 0usize;
+                                for (idx, (name, val)) in vars.iter().enumerate() {
+                                    let label = format!("{name} = {val}");
+                                    let w = pill_w(ui.painter(), &label);
+                                    let rem_after = total - (idx + 1);
+                                    let reserve = if rem_after > 0 {
+                                        let badge = format!("+{rem_after}");
+                                        gap + pill_w(ui.painter(), &badge)
+                                    } else {
+                                        0.0
+                                    };
+                                    if w + reserve > ui.available_width() {
+                                        break;
+                                    }
+                                    let resp = style::paint_pill(
+                                        ui,
+                                        &label,
+                                        palette.bg_surface,
+                                        palette.syn_assign,
+                                        Stroke::new(1.0, palette.border_subtle),
+                                        11.5,
+                                    );
+                                    if resp.clicked() {
+                                        self.pending_insert = Some((*name).to_owned());
+                                    }
+                                    shown += 1;
+                                }
+
+                                if shown < total {
+                                    let hidden = total - shown;
+                                    let badge = format!("+{hidden}");
+                                    if pill_w(ui.painter(), &badge) <= ui.available_width() {
+                                        let tip = vars[shown..]
+                                            .iter()
+                                            .map(|(n, v)| format!("{n} = {v}"))
+                                            .collect::<Vec<_>>()
+                                            .join("\n");
+                                        style::paint_pill(
+                                            ui,
+                                            &badge,
+                                            palette.bg_surface,
+                                            palette.text_secondary,
+                                            Stroke::new(1.0, palette.border_subtle),
+                                            11.5,
+                                        )
+                                        .on_hover_text(tip);
+                                    }
+                                }
+                            },
+                        );
+                    },
+                );
             });
         text_changed
     }
@@ -741,5 +806,39 @@ avg
             }
         }
         assert_eq!(hovered_pairs, 0, "adjacent Value and Error rows must never hover at the same time");
+    }
+
+    #[test]
+    fn bottom_bar_keeps_controls_inside_narrow_window_without_overlap() {
+        let ctx = egui::Context::default();
+        style::install_fonts(&ctx);
+        let palette = style::apply_theme(&ctx, ThemeId::Dark);
+        let mut view = NotebookView::new(tr(Lang::Ru).nb_default_doc.to_owned());
+        let mut precision = 8u32;
+
+        for w in [680.0f32, 540.0, 420.0, 1040.0] {
+            let input = egui::RawInput {
+                screen_rect: Some(Rect::from_min_size(Pos2::ZERO, egui::Vec2::new(w, 520.0))),
+                ..Default::default()
+            };
+            let mut out = ctx.run_ui(input, |ui| {
+                egui::CentralPanel::default().show(ui, |ui| {
+                    let _ = view.show(ui, ThemeId::Dark, Lang::Ru, 15.0, &mut precision, &palette);
+                });
+            });
+            for clipped in &out.shapes {
+                if let Shape::Text(t) = &clipped.shape {
+                    let txt = t.galley.text();
+                    if txt == tr(Lang::Ru).nb_clear || txt == tr(Lang::Ru).nb_examples {
+                        let right = t.pos.x + t.galley.size().x;
+                        assert!(
+                            right <= w,
+                            "button '{txt}' overflowed window width {w}: right={right}"
+                        );
+                    }
+                }
+            }
+            out.textures_delta.clear();
+        }
     }
 }
